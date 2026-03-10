@@ -1,4 +1,5 @@
 pub mod policy;
+pub mod session;
 
 use std::{
     path::{Path, PathBuf},
@@ -24,7 +25,10 @@ use tokio::net::UnixListener;
 use tracing::{error, info};
 use url::Url;
 
-use crate::policy::{Denial, Policy};
+use crate::{
+    policy::{Denial, Policy},
+    session::{SessionManager, inject_session_labels},
+};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -32,6 +36,7 @@ pub struct Config {
     pub backend: BackendConfig,
     pub policy_path: PathBuf,
     pub advertised_host: String,
+    pub keep_on_failure: bool,
 }
 
 impl Config {
@@ -53,11 +58,18 @@ impl Config {
         let advertised_host =
             std::env::var("PSP_ADVERTISED_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
+        let keep_on_failure = std::env::var("PSP_KEEP_ON_FAILURE")
+            .ok()
+            .as_deref()
+            .map(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+
         Ok(Self {
             listen_socket,
             backend: BackendConfig::parse(&backend_raw)?,
             policy_path,
             advertised_host,
+            keep_on_failure,
         })
     }
 }
@@ -87,6 +99,7 @@ pub struct AppState {
     backend: BackendClient,
     policy: Policy,
     advertised_host: String,
+    sessions: SessionManager,
 }
 
 impl AppState {
@@ -94,12 +107,49 @@ impl AppState {
         backend: BackendConfig,
         policy: Policy,
         advertised_host: impl Into<String>,
+        keep_on_failure: bool,
     ) -> Result<Self> {
         Ok(Self {
             backend: BackendClient::new(backend)?,
             policy,
             advertised_host: advertised_host.into(),
+            sessions: SessionManager::new(keep_on_failure),
         })
+    }
+
+    async fn startup_sweep(&self) -> Result<(), ProxyError> {
+        let response = self
+            .backend
+            .get_json("/containers/json?all=1&filters=%7B%22label%22%3A%5B%22io.psp.managed%3Dtrue%22%5D%7D")
+            .await?;
+
+        let Some(containers) = response.as_array() else {
+            return Ok(());
+        };
+
+        for container in containers {
+            if let Some(id) = container.get("Id").and_then(|value| value.as_str()) {
+                self.backend
+                    .delete(&format!("/containers/{id}?force=1"))
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn cleanup_tracked_resources(&self) -> Result<(), ProxyError> {
+        if self.sessions.keep_on_failure() {
+            return Ok(());
+        }
+
+        for id in self.sessions.tracked_container_ids() {
+            self.backend
+                .delete(&format!("/containers/{id}?force=1"))
+                .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -144,7 +194,9 @@ impl BackendClient {
                     .map_err(ProxyError::internal)?;
                 let mut upstream = client.request(method, url);
                 for (name, value) in headers {
-                    if name.as_str().eq_ignore_ascii_case("host") {
+                    if name.as_str().eq_ignore_ascii_case("host")
+                        || name == http::header::CONTENT_LENGTH
+                    {
                         continue;
                     }
                     upstream = upstream.header(name, value);
@@ -165,7 +217,9 @@ impl BackendClient {
                 let upstream_uri: hyper::Uri = hyperlocal::Uri::new(socket, path_and_query).into();
                 let mut request_builder = HyperRequest::builder().method(method).uri(upstream_uri);
                 for (name, value) in headers {
-                    if name.as_str().eq_ignore_ascii_case("host") {
+                    if name.as_str().eq_ignore_ascii_case("host")
+                        || name == http::header::CONTENT_LENGTH
+                    {
                         continue;
                     }
                     request_builder = request_builder.header(name, value);
@@ -190,6 +244,21 @@ impl BackendClient {
                 })
             }
         }
+    }
+
+    async fn get_json(&self, path_and_query: &str) -> Result<serde_json::Value, ProxyError> {
+        let uri: Uri = path_and_query.parse().map_err(ProxyError::internal)?;
+        let response = self
+            .send(Method::GET, &uri, &http::HeaderMap::new(), Bytes::new())
+            .await?;
+        serde_json::from_slice(&response.body).map_err(ProxyError::internal)
+    }
+
+    async fn delete(&self, path_and_query: &str) -> Result<(), ProxyError> {
+        let uri: Uri = path_and_query.parse().map_err(ProxyError::internal)?;
+        self.send(Method::DELETE, &uri, &http::HeaderMap::new(), Bytes::new())
+            .await?;
+        Ok(())
     }
 }
 
@@ -218,6 +287,7 @@ async fn proxy_request(
     }
 
     let (parts, body) = request.into_parts();
+    let session_id = state.sessions.session_id(&parts.headers);
     let body = body
         .collect()
         .await
@@ -234,11 +304,33 @@ async fn proxy_request(
         )
         .map_err(ProxyError::policy_denied)?;
 
+    let body = maybe_inject_session_labels(&parts.method, parts.uri.path(), body, &session_id)
+        .map_err(ProxyError::internal)?;
+
     let method = parts.method.clone();
+    let normalized_path = normalize_versioned_path(parts.uri.path());
     let upstream = state
         .backend
         .send(parts.method, &parts.uri, &parts.headers, body)
         .await?;
+
+    if method == Method::POST
+        && normalized_path == "/containers/create"
+        && upstream.status == StatusCode::CREATED
+    {
+        if let Some(id) = extract_container_id(&upstream.body) {
+            state.sessions.track_container(&session_id, &id);
+        }
+    }
+
+    if method == Method::DELETE
+        && normalized_path.starts_with("/containers/")
+        && upstream.status.is_success()
+    {
+        if let Some(id) = container_id_from_path(&normalized_path) {
+            state.sessions.untrack_container(id);
+        }
+    }
 
     let body = rewrite_response_body(
         &method,
@@ -281,19 +373,28 @@ pub async fn serve_with_shutdown(config: Config) -> Result<()> {
         )
     })?;
 
-    info!(socket = %config.listen_socket.display(), policy = %config.policy_path.display(), advertised_host = %config.advertised_host, "psp listening");
+    info!(socket = %config.listen_socket.display(), policy = %config.policy_path.display(), advertised_host = %config.advertised_host, keep_on_failure = config.keep_on_failure, "psp listening");
 
-    axum::serve(
-        listener,
-        router(AppState::new(
-            config.backend,
-            policy,
-            config.advertised_host,
-        )?),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("psp server exited unexpectedly")?;
+    let state = AppState::new(
+        config.backend,
+        policy,
+        config.advertised_host,
+        config.keep_on_failure,
+    )?;
+    state
+        .startup_sweep()
+        .await
+        .map_err(|error| anyhow!("startup sweep failed: {error:?}"))?;
+
+    axum::serve(listener, router(state.clone()))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("psp server exited unexpectedly")?;
+
+    state
+        .cleanup_tracked_resources()
+        .await
+        .map_err(|error| anyhow!("shutdown cleanup failed: {error:?}"))?;
 
     Ok(())
 }
@@ -403,6 +504,37 @@ fn path_segment_count(path: &str) -> usize {
         .split('/')
         .filter(|s| !s.is_empty())
         .count()
+}
+
+fn maybe_inject_session_labels(
+    method: &Method,
+    path: &str,
+    body: Bytes,
+    session_id: &str,
+) -> Result<Bytes> {
+    if method == Method::POST && normalize_versioned_path(path) == "/containers/create" {
+        return inject_session_labels(body, session_id);
+    }
+    Ok(body)
+}
+
+fn extract_container_id(body: &Bytes) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            json.get("Id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+}
+
+fn container_id_from_path(path: &str) -> Option<&str> {
+    let trimmed = path.trim_start_matches("/containers/");
+    if trimmed.contains('/') {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn rewrite_response_body(
@@ -740,6 +872,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn injects_session_labels_on_container_create() {
+        let captured = Arc::new(Mutex::new(None::<Value>));
+        let (backend_url, backend_shutdown, backend_handle) =
+            spawn_create_backend(captured.clone()).await;
+        let temp = TempDir::new().unwrap();
+        let socket = temp.path().join("psp.sock");
+        let (psp_shutdown, psp_handle) = spawn_psp(socket.clone(), backend_url).await;
+
+        let client: TestClient<_, Full<Bytes>> =
+            TestClient::builder(TokioExecutor::new()).build(UnixConnector);
+        let request = HyperRequest::builder()
+            .method(Method::POST)
+            .uri::<hyper::Uri>(hyperlocal::Uri::new(&socket, "/v1.41/containers/create").into())
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(session::SESSION_HEADER, "sess-123")
+            .body(Full::new(Bytes::from(
+                serde_json::to_vec(&json!({"Image":"postgres:16"})).unwrap(),
+            )))
+            .unwrap();
+        let response = client.request(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let captured = captured.lock().unwrap().clone().unwrap();
+        assert_eq!(captured["Labels"][session::LABEL_MANAGED], "true");
+        assert_eq!(captured["Labels"][session::LABEL_SESSION], "sess-123");
+
+        let _ = psp_shutdown.send(());
+        let _ = backend_shutdown.send(());
+        let _ = psp_handle.await;
+        let _ = backend_handle.await;
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_removes_stale_managed_containers() {
+        let calls = Calls::default();
+        let (backend_url, backend_shutdown, backend_handle) =
+            spawn_sweep_backend(calls.clone()).await;
+        let state = AppState::new(
+            BackendConfig::Http(backend_url),
+            test_policy(),
+            "127.0.0.1",
+            false,
+        )
+        .unwrap();
+        state.startup_sweep().await.unwrap();
+
+        assert_eq!(
+            calls.snapshot(),
+            vec![
+                (
+                    "GET".into(),
+                    "/containers/json?all=1&filters=%7B%22label%22%3A%5B%22io.psp.managed%3Dtrue%22%5D%7D"
+                        .into(),
+                ),
+                ("DELETE".into(), "/containers/stale-1?force=1".into()),
+            ]
+        );
+
+        let _ = backend_shutdown.send(());
+        let _ = backend_handle.await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_tracked_resources_deletes_containers_on_shutdown() {
+        let calls = Calls::default();
+        let (backend_url, backend_shutdown, backend_handle) =
+            spawn_delete_backend(calls.clone()).await;
+        let state = AppState::new(
+            BackendConfig::Http(backend_url),
+            test_policy(),
+            "127.0.0.1",
+            false,
+        )
+        .unwrap();
+        state.sessions.track_container("sess-1", "cid-123");
+        state.cleanup_tracked_resources().await.unwrap();
+
+        assert_eq!(
+            calls.snapshot(),
+            vec![("DELETE".into(), "/containers/cid-123?force=1".into())]
+        );
+
+        let _ = backend_shutdown.send(());
+        let _ = backend_handle.await;
+    }
+
+    #[tokio::test]
     async fn accepts_versioned_and_unversioned_supported_paths() {
         assert!(is_supported_endpoint(&Method::GET, "/_ping"));
         assert!(is_supported_endpoint(&Method::GET, "/v1.41/_ping"));
@@ -826,7 +1045,13 @@ mod tests {
         let _ = tokio::fs::remove_file(&socket).await;
         let listener = UnixListener::bind(&socket).unwrap();
         let app = router(
-            AppState::new(BackendConfig::Http(backend_url), test_policy(), "127.0.0.1").unwrap(),
+            AppState::new(
+                BackendConfig::Http(backend_url),
+                test_policy(),
+                "127.0.0.1",
+                false,
+            )
+            .unwrap(),
         );
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -848,6 +1073,104 @@ mod tests {
             },
             images: policy::ImagePolicy::default(),
         }
+    }
+
+    async fn spawn_create_backend(
+        captured: Arc<Mutex<Option<Value>>>,
+    ) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/{*path}",
+            any(move |req: Request| {
+                let captured = captured.clone();
+                async move {
+                    let normalized = normalize_versioned_path(req.uri().path());
+                    match (req.method().clone(), normalized.as_str()) {
+                        (Method::POST, "/containers/create") => {
+                            let body = req.into_body().collect().await.unwrap().to_bytes();
+                            *captured.lock().unwrap() =
+                                Some(serde_json::from_slice::<Value>(&body).unwrap());
+                            (StatusCode::CREATED, Json(json!({"Id":"cid-123"}))).into_response()
+                        }
+                        _ => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }
+            }),
+        );
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        (Url::parse(&format!("http://{addr}/")).unwrap(), tx, handle)
+    }
+
+    async fn spawn_sweep_backend(calls: Calls) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/{*path}",
+            any(move |req: Request| {
+                let calls = calls.clone();
+                async move {
+                    calls.push(req.method(), req.uri());
+                    let normalized = normalize_versioned_path(req.uri().path());
+                    match (req.method().clone(), normalized.as_str()) {
+                        (Method::GET, "/containers/json") => Json(json!([
+                            {"Id":"stale-1","Labels":{session::LABEL_MANAGED:"true"}}
+                        ]))
+                        .into_response(),
+                        (Method::DELETE, "/containers/stale-1") => {
+                            StatusCode::NO_CONTENT.into_response()
+                        }
+                        _ => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }
+            }),
+        );
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        (Url::parse(&format!("http://{addr}/")).unwrap(), tx, handle)
+    }
+
+    async fn spawn_delete_backend(calls: Calls) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/{*path}",
+            any(move |req: Request| {
+                let calls = calls.clone();
+                async move {
+                    calls.push(req.method(), req.uri());
+                    match req.method() {
+                        &Method::DELETE => StatusCode::NO_CONTENT.into_response(),
+                        _ => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }
+            }),
+        );
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        (Url::parse(&format!("http://{addr}/")).unwrap(), tx, handle)
     }
 
     async fn spawn_inspect_backend(

@@ -24,6 +24,7 @@ Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 - Schema-validated policy file at `policy/default-policy.json`
 - Stable deny rule IDs for blocked privileged, namespace, bind mount, device, capability, and image-policy requests
 - Inspect-response host rewriting for sandbox-reachable published ports (`PSP_ADVERTISED_HOST`)
+- Session labels, startup stale-resource sweep, and shutdown cleanup (`x-psp-session-id`, `PSP_KEEP_ON_FAILURE`)
 
 ## Non-goals
 - Replacing AGS

@@ -1,0 +1,10 @@
+{
+  "version": "v1",
+  "bind_mounts": {
+    "allowlist": []
+  },
+  "images": {
+    "allowlist": [],
+    "denylist": []
+  }
+}

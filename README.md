@@ -17,6 +17,13 @@ Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 - Session lifecycle + cleanup
 - Audit/deny diagnostics
 
+## Current implementation
+- Unix socket listener for `DOCKER_HOST=unix://...` style clients
+- Rootless Podman backend forwarding via Unix socket or HTTP base URL
+- Versioned Docker-path allowlist for core lifecycle operations
+- Schema-validated policy file at `policy/default-policy.json`
+- Stable deny rule IDs for blocked privileged, namespace, bind mount, device, capability, and image-policy requests
+
 ## Non-goals
 - Replacing AGS
 - Owning AGS internals

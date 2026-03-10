@@ -1,3 +1,5 @@
+pub mod policy;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -22,10 +24,13 @@ use tokio::net::UnixListener;
 use tracing::{error, info};
 use url::Url;
 
+use crate::policy::{Denial, Policy};
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen_socket: PathBuf,
     pub backend: BackendConfig,
+    pub policy_path: PathBuf,
 }
 
 impl Config {
@@ -40,9 +45,14 @@ impl Config {
             format!("unix://{runtime_dir}/podman/podman.sock")
         });
 
+        let policy_path = std::env::var("PSP_POLICY_FILE")
+            .unwrap_or_else(|_| "policy/default-policy.json".to_string())
+            .into();
+
         Ok(Self {
             listen_socket,
             backend: BackendConfig::parse(&backend_raw)?,
+            policy_path,
         })
     }
 }
@@ -70,12 +80,14 @@ impl BackendConfig {
 #[derive(Clone)]
 pub struct AppState {
     backend: BackendClient,
+    policy: Policy,
 }
 
 impl AppState {
-    pub fn new(backend: BackendConfig) -> Result<Self> {
+    pub fn new(backend: BackendConfig, policy: Policy) -> Result<Self> {
         Ok(Self {
             backend: BackendClient::new(backend)?,
+            policy,
         })
     }
 }
@@ -201,6 +213,16 @@ async fn proxy_request(
         .map_err(ProxyError::internal)?
         .to_bytes();
 
+    state
+        .policy
+        .evaluate_request(
+            &parts.method,
+            parts.uri.path(),
+            parts.uri.query(),
+            body.as_ref(),
+        )
+        .map_err(ProxyError::policy_denied)?;
+
     let upstream = state
         .backend
         .send(parts.method, &parts.uri, &parts.headers, body)
@@ -231,9 +253,16 @@ pub async fn serve_with_shutdown(config: Config) -> Result<()> {
     let listener = UnixListener::bind(&config.listen_socket)
         .with_context(|| format!("failed to bind socket {}", config.listen_socket.display()))?;
 
-    info!(socket = %config.listen_socket.display(), "psp listening");
+    let policy = Policy::load(&config.policy_path).with_context(|| {
+        format!(
+            "failed to load policy from {}",
+            config.policy_path.display()
+        )
+    })?;
 
-    axum::serve(listener, router(AppState::new(config.backend)?))
+    info!(socket = %config.listen_socket.display(), policy = %config.policy_path.display(), "psp listening");
+
+    axum::serve(listener, router(AppState::new(config.backend, policy)?))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("psp server exited unexpectedly")?;
@@ -351,6 +380,7 @@ fn path_segment_count(path: &str) -> usize {
 #[derive(Debug)]
 pub enum ProxyError {
     Unsupported { method: Method, path: String },
+    PolicyDenied(Denial),
     Backend(String),
     Internal(anyhow::Error),
 }
@@ -361,6 +391,10 @@ impl ProxyError {
             method,
             path: path.to_string(),
         }
+    }
+
+    fn policy_denied(denial: Denial) -> Self {
+        Self::PolicyDenied(denial)
     }
 
     fn backend(error: reqwest::Error) -> Self {
@@ -382,6 +416,7 @@ struct ErrorBody<'a> {
     kind: &'a str,
     method: Option<String>,
     path: Option<String>,
+    rule_id: Option<&'a str>,
 }
 
 impl IntoResponse for ProxyError {
@@ -394,6 +429,17 @@ impl IntoResponse for ProxyError {
                     kind: "unsupported_endpoint",
                     method: Some(method.to_string()),
                     path: Some(path),
+                    rule_id: None,
+                },
+            ),
+            Self::PolicyDenied(denial) => json_response(
+                StatusCode::FORBIDDEN,
+                &ErrorBody {
+                    message: denial.reason,
+                    kind: "policy_denied",
+                    method: None,
+                    path: None,
+                    rule_id: Some(denial.rule_id),
                 },
             ),
             Self::Backend(message) => json_response(
@@ -403,6 +449,7 @@ impl IntoResponse for ProxyError {
                     kind: "backend_error",
                     method: None,
                     path: None,
+                    rule_id: None,
                 },
             ),
             Self::Internal(error) => {
@@ -414,6 +461,7 @@ impl IntoResponse for ProxyError {
                         kind: "internal_error",
                         method: None,
                         path: None,
+                        rule_id: None,
                     },
                 )
             }
@@ -578,6 +626,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn denies_policy_blocked_container_create_with_rule_id() {
+        let calls = Calls::default();
+        let (backend_url, backend_shutdown, backend_handle) = spawn_backend(calls.clone()).await;
+        let temp = TempDir::new().unwrap();
+        let socket = temp.path().join("psp.sock");
+        let (psp_shutdown, psp_handle) = spawn_psp(socket.clone(), backend_url).await;
+
+        let client: TestClient<_, Full<Bytes>> =
+            TestClient::builder(TokioExecutor::new()).build(UnixConnector);
+        let response = request_json(
+            &client,
+            &socket,
+            Method::POST,
+            "/v1.41/containers/create",
+            Some(json!({
+                "Image": "postgres:16",
+                "HostConfig": {"Privileged": true}
+            })),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::FORBIDDEN);
+        assert_eq!(response.1["kind"], "policy_denied");
+        assert_eq!(response.1["rule_id"], policy::RULE_PRIVILEGED);
+        assert!(calls.snapshot().is_empty());
+
+        let _ = psp_shutdown.send(());
+        let _ = backend_shutdown.send(());
+        let _ = psp_handle.await;
+        let _ = backend_handle.await;
+    }
+
+    #[tokio::test]
     async fn rejects_unsupported_endpoints_with_structured_error() {
         let calls = Calls::default();
         let (backend_url, backend_shutdown, backend_handle) = spawn_backend(calls.clone()).await;
@@ -612,7 +692,7 @@ mod tests {
         }
         let _ = tokio::fs::remove_file(&socket).await;
         let listener = UnixListener::bind(&socket).unwrap();
-        let app = router(AppState::new(BackendConfig::Http(backend_url)).unwrap());
+        let app = router(AppState::new(BackendConfig::Http(backend_url), test_policy()).unwrap());
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -623,6 +703,16 @@ mod tests {
                 .unwrap();
         });
         (tx, handle)
+    }
+
+    fn test_policy() -> Policy {
+        Policy {
+            version: policy::POLICY_SCHEMA_VERSION.to_string(),
+            bind_mounts: policy::BindMountPolicy {
+                allowlist: vec!["/workspace".into()],
+            },
+            images: policy::ImagePolicy::default(),
+        }
     }
 
     async fn spawn_backend(calls: Calls) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {

@@ -8,7 +8,8 @@ PSP adds an enforcement layer so integration tests can run with explicit, audita
 
 ## Project status
 Planning is tracked in Beads epic `psp-287`.
-Execution starts with `psp-287.1` (ADR + threat model).
+Core architecture ADR: `docs/adr/0001-psp-architecture.md`
+Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 
 ## Scope
 - Docker-compatible API surface for Testcontainers-critical flows

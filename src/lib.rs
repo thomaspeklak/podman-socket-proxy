@@ -559,6 +559,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_versioned_and_unversioned_supported_paths() {
+        assert!(is_supported_endpoint(&Method::GET, "/_ping"));
+        assert!(is_supported_endpoint(&Method::GET, "/v1.41/_ping"));
+        assert!(is_supported_endpoint(&Method::POST, "/containers/create"));
+        assert!(is_supported_endpoint(
+            &Method::POST,
+            "/v1.41/containers/create"
+        ));
+        assert!(is_supported_endpoint(
+            &Method::DELETE,
+            "/v1.41/containers/cid-123"
+        ));
+        assert!(!is_supported_endpoint(
+            &Method::POST,
+            "/v1.41/networks/create"
+        ));
+    }
+
+    #[tokio::test]
     async fn rejects_unsupported_endpoints_with_structured_error() {
         let calls = Calls::default();
         let (backend_url, backend_shutdown, backend_handle) = spawn_backend(calls.clone()).await;

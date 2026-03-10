@@ -22,7 +22,7 @@ use hyperlocal::UnixConnector;
 use reqwest::Client as ReqwestClient;
 use serde::Serialize;
 use tokio::net::UnixListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 
 use crate::{
@@ -268,6 +268,33 @@ struct ForwardedResponse {
     body: Bytes,
 }
 
+#[derive(Clone, Debug, Default)]
+struct RequestAuditContext {
+    session_id: String,
+    operation: String,
+    path: String,
+    target_image: Option<String>,
+    target_container: Option<String>,
+}
+
+impl RequestAuditContext {
+    fn from_request(
+        method: &Method,
+        path: &str,
+        query: Option<&str>,
+        body: &[u8],
+        session_id: String,
+    ) -> Self {
+        Self {
+            session_id,
+            operation: operation_name(method, path),
+            path: path.to_string(),
+            target_image: extract_target_image(method, path, query, body),
+            target_container: extract_target_container(path),
+        }
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", any(proxy_request))
@@ -280,6 +307,24 @@ async fn proxy_request(
     request: Request,
 ) -> Result<Response<Body>, ProxyError> {
     if !is_supported_endpoint(request.method(), request.uri().path()) {
+        let session_id = state.sessions.session_id(request.headers());
+        let audit = RequestAuditContext::from_request(
+            request.method(),
+            request.uri().path(),
+            request.uri().query(),
+            &[],
+            session_id,
+        );
+        warn!(
+            decision = "deny",
+            kind = "unsupported_endpoint",
+            session = %audit.session_id,
+            operation = %audit.operation,
+            path = %audit.path,
+            target_image = audit.target_image.as_deref().unwrap_or(""),
+            target_container = audit.target_container.as_deref().unwrap_or(""),
+            "psp denied request"
+        );
         return Err(ProxyError::unsupported(
             request.method().clone(),
             request.uri().path(),
@@ -293,16 +338,34 @@ async fn proxy_request(
         .await
         .map_err(ProxyError::internal)?
         .to_bytes();
+    let audit = RequestAuditContext::from_request(
+        &parts.method,
+        parts.uri.path(),
+        parts.uri.query(),
+        body.as_ref(),
+        session_id.clone(),
+    );
 
-    state
-        .policy
-        .evaluate_request(
-            &parts.method,
-            parts.uri.path(),
-            parts.uri.query(),
-            body.as_ref(),
-        )
-        .map_err(ProxyError::policy_denied)?;
+    if let Err(denial) = state.policy.evaluate_request(
+        &parts.method,
+        parts.uri.path(),
+        parts.uri.query(),
+        body.as_ref(),
+    ) {
+        warn!(
+            decision = "deny",
+            kind = "policy_denied",
+            rule_id = denial.rule_id,
+            session = %audit.session_id,
+            operation = %audit.operation,
+            path = %audit.path,
+            target_image = audit.target_image.as_deref().unwrap_or(""),
+            target_container = audit.target_container.as_deref().unwrap_or(""),
+            reason = %denial.reason,
+            "psp denied request"
+        );
+        return Err(ProxyError::policy_denied(denial));
+    }
 
     let body = maybe_inject_session_labels(&parts.method, parts.uri.path(), body, &session_id)
         .map_err(ProxyError::internal)?;
@@ -331,6 +394,17 @@ async fn proxy_request(
             state.sessions.untrack_container(id);
         }
     }
+
+    info!(
+        decision = "allow",
+        session = %audit.session_id,
+        operation = %audit.operation,
+        path = %audit.path,
+        target_image = audit.target_image.as_deref().unwrap_or(""),
+        target_container = audit.target_container.as_deref().unwrap_or(""),
+        status = upstream.status.as_u16(),
+        "psp forwarded request"
+    );
 
     let body = rewrite_response_body(
         &method,
@@ -526,6 +600,64 @@ fn extract_container_id(body: &Bytes) -> Option<String> {
                 .and_then(|value| value.as_str())
                 .map(str::to_string)
         })
+}
+
+fn operation_name(method: &Method, path: &str) -> String {
+    let normalized = normalize_versioned_path(path);
+    match (method.as_str(), normalized.as_str()) {
+        ("GET", "/_ping") => "daemon.ping".into(),
+        ("GET", "/version") => "daemon.version".into(),
+        ("GET", "/info") => "daemon.info".into(),
+        ("POST", "/images/create") => "images.create".into(),
+        ("POST", "/containers/create") => "containers.create".into(),
+        _ if method == Method::POST && normalized.ends_with("/start") => "containers.start".into(),
+        _ if method == Method::GET && normalized.ends_with("/json") => "containers.inspect".into(),
+        _ if method == Method::GET && normalized.ends_with("/logs") => "containers.logs".into(),
+        _ if method == Method::POST && normalized.ends_with("/wait") => "containers.wait".into(),
+        _ if method == Method::DELETE && normalized.starts_with("/containers/") => {
+            "containers.delete".into()
+        }
+        _ => format!("{} {}", method, normalized),
+    }
+}
+
+fn extract_target_image(
+    method: &Method,
+    path: &str,
+    query: Option<&str>,
+    body: &[u8],
+) -> Option<String> {
+    let normalized = normalize_versioned_path(path);
+    if method == Method::POST && normalized == "/images/create" {
+        return query.and_then(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "fromImage")
+                .map(|(_, value)| value.into_owned())
+        });
+    }
+
+    if method == Method::POST && normalized == "/containers/create" {
+        return serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|json| {
+                json.get("Image")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            });
+    }
+
+    None
+}
+
+fn extract_target_container(path: &str) -> Option<String> {
+    let normalized = normalize_versioned_path(path);
+    let trimmed = normalized.strip_prefix("/containers/")?;
+    let id = trimmed.split('/').next()?;
+    if id == "create" {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 fn container_id_from_path(path: &str) -> Option<&str> {
@@ -956,6 +1088,23 @@ mod tests {
 
         let _ = backend_shutdown.send(());
         let _ = backend_handle.await;
+    }
+
+    #[test]
+    fn derives_secret_safe_audit_context() {
+        let body =
+            serde_json::to_vec(&json!({"Image":"postgres:16","Env":["TOKEN=secret"]})).unwrap();
+        let audit = RequestAuditContext::from_request(
+            &Method::POST,
+            "/v1.41/containers/create",
+            None,
+            &body,
+            "sess-a".into(),
+        );
+        assert_eq!(audit.session_id, "sess-a");
+        assert_eq!(audit.operation, "containers.create");
+        assert_eq!(audit.target_image.as_deref(), Some("postgres:16"));
+        assert_eq!(audit.target_container, None);
     }
 
     #[tokio::test]

@@ -27,6 +27,42 @@ Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 - Session labels, startup stale-resource sweep, and shutdown cleanup (`x-psp-session-id`, `PSP_KEEP_ON_FAILURE`)
 - Dedicated integration suite in `tests/integration_suite.rs` for happy path, blocked path, parallel inspect, and cleanup behavior
 
+## Quickstart
+
+Build and validate:
+
+```bash
+cargo build
+cargo test
+```
+
+Run PSP against a rootless Podman socket:
+
+```bash
+export PSP_BACKEND="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+export PSP_LISTEN_SOCKET="/tmp/psp.sock"
+export PSP_POLICY_FILE="policy/default-policy.json"
+export PSP_ADVERTISED_HOST="127.0.0.1"
+
+cargo run --bin psp
+```
+
+Point Docker-compatible clients at PSP:
+
+```bash
+export DOCKER_HOST="unix:///tmp/psp.sock"
+```
+
+## Docs map
+- Architecture / threat model: `docs/adr/0001-psp-architecture.md`
+- Compatibility contract: `docs/compatibility/testcontainers-profile.md`
+- Policy reference: `docs/policy-reference.md`
+- Host/port resolution: `docs/operations/host-port-resolution.md`
+- Session lifecycle: `docs/operations/session-lifecycle.md`
+- Audit logging: `docs/operations/audit-logging.md`
+- Operator runbook: `docs/operations/runbook.md`
+- AGS integration contract: `docs/ags-integration.md`
+
 ## Non-goals
 - Replacing AGS
 - Owning AGS internals

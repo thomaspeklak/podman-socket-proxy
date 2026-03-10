@@ -23,6 +23,7 @@ Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 - Versioned Docker-path allowlist for core lifecycle operations
 - Schema-validated policy file at `policy/default-policy.json`
 - Stable deny rule IDs for blocked privileged, namespace, bind mount, device, capability, and image-policy requests
+- Inspect-response host rewriting for sandbox-reachable published ports (`PSP_ADVERTISED_HOST`)
 
 ## Non-goals
 - Replacing AGS

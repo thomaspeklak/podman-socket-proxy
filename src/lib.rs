@@ -31,6 +31,7 @@ pub struct Config {
     pub listen_socket: PathBuf,
     pub backend: BackendConfig,
     pub policy_path: PathBuf,
+    pub advertised_host: String,
 }
 
 impl Config {
@@ -49,10 +50,14 @@ impl Config {
             .unwrap_or_else(|_| "policy/default-policy.json".to_string())
             .into();
 
+        let advertised_host =
+            std::env::var("PSP_ADVERTISED_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
         Ok(Self {
             listen_socket,
             backend: BackendConfig::parse(&backend_raw)?,
             policy_path,
+            advertised_host,
         })
     }
 }
@@ -81,13 +86,19 @@ impl BackendConfig {
 pub struct AppState {
     backend: BackendClient,
     policy: Policy,
+    advertised_host: String,
 }
 
 impl AppState {
-    pub fn new(backend: BackendConfig, policy: Policy) -> Result<Self> {
+    pub fn new(
+        backend: BackendConfig,
+        policy: Policy,
+        advertised_host: impl Into<String>,
+    ) -> Result<Self> {
         Ok(Self {
             backend: BackendClient::new(backend)?,
             policy,
+            advertised_host: advertised_host.into(),
         })
     }
 }
@@ -223,21 +234,31 @@ async fn proxy_request(
         )
         .map_err(ProxyError::policy_denied)?;
 
+    let method = parts.method.clone();
     let upstream = state
         .backend
         .send(parts.method, &parts.uri, &parts.headers, body)
         .await?;
 
+    let body = rewrite_response_body(
+        &method,
+        parts.uri.path(),
+        upstream.status,
+        &state.advertised_host,
+        upstream.body,
+    );
+
     let mut response = Response::builder().status(upstream.status);
     for (name, value) in &upstream.headers {
-        if hop_by_hop_header(name) {
+        if hop_by_hop_header(name) || name == http::header::CONTENT_LENGTH {
             continue;
         }
         response = response.header(name, value);
     }
+    response = response.header(http::header::CONTENT_LENGTH, body.len());
 
     response
-        .body(Body::from(upstream.body))
+        .body(Body::from(body))
         .map_err(ProxyError::internal)
 }
 
@@ -260,12 +281,19 @@ pub async fn serve_with_shutdown(config: Config) -> Result<()> {
         )
     })?;
 
-    info!(socket = %config.listen_socket.display(), policy = %config.policy_path.display(), "psp listening");
+    info!(socket = %config.listen_socket.display(), policy = %config.policy_path.display(), advertised_host = %config.advertised_host, "psp listening");
 
-    axum::serve(listener, router(AppState::new(config.backend, policy)?))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("psp server exited unexpectedly")?;
+    axum::serve(
+        listener,
+        router(AppState::new(
+            config.backend,
+            policy,
+            config.advertised_host,
+        )?),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("psp server exited unexpectedly")?;
 
     Ok(())
 }
@@ -375,6 +403,48 @@ fn path_segment_count(path: &str) -> usize {
         .split('/')
         .filter(|s| !s.is_empty())
         .count()
+}
+
+fn rewrite_response_body(
+    method: &Method,
+    path: &str,
+    status: StatusCode,
+    advertised_host: &str,
+    body: Bytes,
+) -> Bytes {
+    if method != Method::GET || status != StatusCode::OK {
+        return body;
+    }
+
+    let normalized = normalize_versioned_path(path);
+    if !(normalized.starts_with("/containers/") && normalized.ends_with("/json")) {
+        return body;
+    }
+
+    let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+
+    let Some(ports) = json
+        .get_mut("NetworkSettings")
+        .and_then(|network_settings| network_settings.get_mut("Ports"))
+        .and_then(|ports| ports.as_object_mut())
+    else {
+        return body;
+    };
+
+    for entries in ports.values_mut() {
+        let Some(entries) = entries.as_array_mut() else {
+            continue;
+        };
+        for entry in entries {
+            if let Some(host_ip) = entry.get_mut("HostIp") {
+                *host_ip = serde_json::Value::String(advertised_host.to_string());
+            }
+        }
+    }
+
+    serde_json::to_vec(&json).map(Bytes::from).unwrap_or(body)
 }
 
 #[derive(Debug)]
@@ -607,6 +677,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rewrites_container_inspect_host_ports_for_client_connectivity() {
+        let listener_a = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener_b = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port_a = listener_a.local_addr().unwrap().port();
+        let port_b = listener_b.local_addr().unwrap().port();
+        let _accept_a = tokio::spawn(async move {
+            let _ = listener_a.accept().await;
+        });
+        let _accept_b = tokio::spawn(async move {
+            let _ = listener_b.accept().await;
+        });
+
+        let inspect_body = json!({
+            "Id": "cid-123",
+            "NetworkSettings": {
+                "Ports": {
+                    "5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": port_a.to_string()}],
+                    "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": port_b.to_string()}]
+                }
+            }
+        });
+        let (backend_url, backend_shutdown, backend_handle) =
+            spawn_inspect_backend(inspect_body).await;
+
+        let temp = TempDir::new().unwrap();
+        let socket = temp.path().join("psp.sock");
+        let (psp_shutdown, psp_handle) = spawn_psp(socket.clone(), backend_url).await;
+        let client: TestClient<_, Full<Bytes>> =
+            TestClient::builder(TokioExecutor::new()).build(UnixConnector);
+
+        let inspect = request_json(
+            &client,
+            &socket,
+            Method::GET,
+            "/v1.41/containers/cid-123/json",
+            None,
+        )
+        .await;
+        assert_eq!(inspect.0, StatusCode::OK);
+        assert_eq!(
+            inspect.1["NetworkSettings"]["Ports"]["5432/tcp"][0]["HostIp"],
+            "127.0.0.1"
+        );
+        assert_eq!(
+            inspect.1["NetworkSettings"]["Ports"]["8080/tcp"][0]["HostIp"],
+            "127.0.0.1"
+        );
+
+        let endpoints = [port_a, port_b].map(|port| format!("127.0.0.1:{port}"));
+        let (a, b) = tokio::join!(
+            tokio::net::TcpStream::connect(&endpoints[0]),
+            tokio::net::TcpStream::connect(&endpoints[1]),
+        );
+        assert!(a.is_ok());
+        assert!(b.is_ok());
+
+        let _ = psp_shutdown.send(());
+        let _ = backend_shutdown.send(());
+        let _ = psp_handle.await;
+        let _ = backend_handle.await;
+    }
+
+    #[tokio::test]
     async fn accepts_versioned_and_unversioned_supported_paths() {
         assert!(is_supported_endpoint(&Method::GET, "/_ping"));
         assert!(is_supported_endpoint(&Method::GET, "/v1.41/_ping"));
@@ -692,7 +825,9 @@ mod tests {
         }
         let _ = tokio::fs::remove_file(&socket).await;
         let listener = UnixListener::bind(&socket).unwrap();
-        let app = router(AppState::new(BackendConfig::Http(backend_url), test_policy()).unwrap());
+        let app = router(
+            AppState::new(BackendConfig::Http(backend_url), test_policy(), "127.0.0.1").unwrap(),
+        );
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -713,6 +848,40 @@ mod tests {
             },
             images: policy::ImagePolicy::default(),
         }
+    }
+
+    async fn spawn_inspect_backend(
+        inspect_body: Value,
+    ) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/{*path}",
+            any(move |req: Request| {
+                let inspect_body = inspect_body.clone();
+                async move {
+                    let normalized = normalize_versioned_path(req.uri().path());
+                    match (req.method().clone(), normalized.as_str()) {
+                        (Method::GET, path)
+                            if path.starts_with("/containers/") && path.ends_with("/json") =>
+                        {
+                            Json(inspect_body).into_response()
+                        }
+                        _ => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }
+            }),
+        );
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        (Url::parse(&format!("http://{addr}/")).unwrap(), tx, handle)
     }
 
     async fn spawn_backend(calls: Calls) -> (Url, oneshot::Sender<()>, JoinHandle<()>) {

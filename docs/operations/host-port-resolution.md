@@ -1,44 +1,83 @@
 # PSP host/port resolution strategy
 
-- Related issue: `psp-287.5`
+Test code running inside a sandbox needs a deterministic way to connect to ports published by Podman-managed containers.
 
-## Problem
+## The problem
 
-Test code running inside the sandbox needs a deterministic way to connect to ports published by Podman-managed containers.
+Backend inspect responses may advertise wildcard or backend-oriented addresses such as `0.0.0.0`. That is not always the most useful connect target for the sandbox client.
 
-With Podman, inspect responses and published-port metadata may advertise wildcard or backend-oriented addresses such as `0.0.0.0`. That is not always the most useful value for the sandbox client when it needs an actual connect target.
+A test client usually wants:
 
-## PSP v1 strategy
+- the real mapped host port chosen by the runtime
+- a stable host value it can actually connect to from the sandbox
 
-PSP rewrites `NetworkSettings.Ports[*].HostIp` in container inspect responses to a configurable advertised host value.
+## PSP strategy
 
-### Default
+PSP rewrites:
 
-- `PSP_ADVERTISED_HOST=127.0.0.1`
-
-### Override
-
-Set `PSP_ADVERTISED_HOST` when the sandbox reaches published ports through a different host name or address.
-
-Examples:
-
-```bash
-PSP_ADVERTISED_HOST=127.0.0.1
-PSP_ADVERTISED_HOST=host.containers.internal
-PSP_ADVERTISED_HOST=<sandbox-reachable-hostname>
+```text
+NetworkSettings.Ports[*].HostIp
 ```
 
-PSP preserves the backend-selected `HostPort` value and only normalizes the connect host exposed to the client.
+in container inspect responses to a configurable advertised host.
 
-## Why this works
+## Default
 
-- random host ports remain supported because Podman still chooses the host port
+```text
+PSP_ADVERTISED_HOST=127.0.0.1
+```
+
+## Override examples
+
+Use a different value when the sandbox should connect through another hostname or address:
+
+```bash
+export PSP_ADVERTISED_HOST=127.0.0.1
+export PSP_ADVERTISED_HOST=host.containers.internal
+export PSP_ADVERTISED_HOST=sandbox-gateway.local
+```
+
+PSP preserves the backend-selected `HostPort`. It only normalizes the host component presented to the client.
+
+## Example
+
+### Backend inspect response
+
+```json
+{
+  "NetworkSettings": {
+    "Ports": {
+      "5432/tcp": [
+        {"HostIp": "0.0.0.0", "HostPort": "15432"}
+      ]
+    }
+  }
+}
+```
+
+### PSP inspect response with `PSP_ADVERTISED_HOST=127.0.0.1`
+
+```json
+{
+  "NetworkSettings": {
+    "Ports": {
+      "5432/tcp": [
+        {"HostIp": "127.0.0.1", "HostPort": "15432"}
+      ]
+    }
+  }
+}
+```
+
+## Why this works well
+
+- random host ports remain supported because Podman still chooses the port
 - parallel test execution remains safe because each inspect response carries the actual mapped port
-- sandbox clients get a stable host value instead of a wildcard listener address
+- the client gets a connectable host instead of a wildcard listener address
 
-## Validation
+## Validation in this repo
 
-The broker test suite includes a reproducible connectivity test that:
+The test suite includes a reproducible connectivity test that:
 
 1. injects an inspect response with wildcard host bindings
 2. verifies PSP rewrites those bindings to `127.0.0.1`

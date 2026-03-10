@@ -1,0 +1,10 @@
+{
+  "version": "v1",
+  "bind_mounts": {
+    "allowlist": ["/workspace", "/tmp/psp-share"]
+  },
+  "images": {
+    "allowlist": [],
+    "denylist": ["alpine:latest"]
+  }
+}

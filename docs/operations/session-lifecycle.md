@@ -1,37 +1,52 @@
 # PSP session lifecycle and cleanup
 
-- Related issue: `psp-287.6`
+PSP tracks ownership of managed resources so repeated runs do not silently accumulate stale containers.
 
 ## Session identity
 
 PSP accepts an optional request header:
 
-- `x-psp-session-id`
+```text
+x-psp-session-id
+```
 
-If absent, PSP uses `anonymous`.
+If absent, PSP uses:
 
-## Resource labeling
+```text
+anonymous
+```
 
-For container create requests, PSP injects labels:
+## Resource labels injected by PSP
+
+For container create requests, PSP injects labels into the forwarded request:
 
 - `io.psp.managed=true`
 - `io.psp.session=<session-id>`
 
-These labels provide ownership and cleanup scoping for PSP-managed resources.
+These labels are applied at the broker boundary, not trusted from the client.
+
+## Why labels matter
+
+Labels allow PSP to:
+
+- recognize resources it created
+- attribute containers to a session
+- perform stale-resource cleanup
+- avoid relying on client-side cleanup discipline alone
 
 ## Cleanup behavior
 
 ### Startup sweep
 
-On startup, PSP queries Podman for stale containers labeled `io.psp.managed=true` and force-removes them before accepting new requests.
+On startup, PSP queries the backend for containers labeled `io.psp.managed=true` and force-removes them before accepting new requests.
 
-This is the crash-recovery path for containers left behind by abnormal exits.
+This is the crash-recovery path for resources left behind by abnormal exits.
 
 ### Shutdown cleanup
 
-On normal shutdown, PSP force-removes containers tracked in the current process session state.
+During normal shutdown, PSP force-removes tracked containers created during the current process lifetime.
 
-### Debug override
+### Debug retention
 
 Set:
 
@@ -39,10 +54,30 @@ Set:
 PSP_KEEP_ON_FAILURE=true
 ```
 
-to skip shutdown cleanup and leave managed containers behind for debugging.
+to skip shutdown cleanup and intentionally keep managed containers for debugging.
+
+On the next normal PSP start, the startup sweep will still remove stale managed containers.
+
+## Example request flow
+
+1. client sends `x-psp-session-id: sess-123`
+2. client calls `POST /v1.41/containers/create`
+3. PSP injects:
+   - `io.psp.managed=true`
+   - `io.psp.session=sess-123`
+4. PSP tracks the returned container ID in memory
+5. on shutdown, PSP removes tracked containers unless keep-on-failure is enabled
 
 ## Operational notes
 
 - repeated PSP runs should not accumulate stale managed containers
-- if shutdown cleanup is disabled, startup sweep will remove those stale containers on the next PSP start
-- session labeling is applied at the broker boundary, not delegated to the client
+- session labeling is useful for attribution even when the client is well-behaved
+- cleanup is best-effort; startup sweep is the recovery mechanism for abnormal exits
+
+## What is currently covered
+
+The repository includes test coverage for:
+
+- label injection on create
+- startup stale-container sweep
+- shutdown cleanup of tracked resources

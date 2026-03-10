@@ -1,77 +1,96 @@
 # PSP Testcontainers compatibility profile
 
-- Status: v1 draft contract
-- Related issue: `psp-287.4`
+Status: v1 contract.
 
-## Purpose
+This document defines the Docker-compatible API surface PSP currently supports for Rust `testcontainers`-style flows.
 
-This document defines the initial Docker-compatible API contract that PSP supports for Rust `testcontainers`-style lifecycle flows.
+PSP does **not** aim for full Docker Engine parity. The surface is intentionally narrow and centered on the request sequence needed to create, start, inspect, observe, wait for, and remove test containers through a policy-gated broker.
 
-PSP does **not** aim for full Docker Engine parity. The supported surface is intentionally narrow and centered on the request sequence needed to create, start, inspect, observe, wait for, and remove test containers through a policy-gated broker.
+## Target client flow
 
-## Supported client flow
+The supported baseline flow is:
 
-The target v1 flow is:
+1. probe daemon health/capabilities
+2. pull an image if missing
+3. create a container
+4. start the container
+5. inspect container state and published ports
+6. read logs while waiting for readiness
+7. wait for exit where needed
+8. remove the container
 
-1. Probe daemon health/capabilities.
-2. Pull an image if missing.
-3. Create a container.
-4. Start the container.
-5. Inspect container state and port metadata.
-6. Read logs while waiting for readiness.
-7. Wait for exit where needed.
-8. Remove the container.
+This covers the common lifecycle used by Rust `testcontainers` modules that follow the standard startup pattern.
 
-This covers the baseline lifecycle used by Rust `testcontainers` modules that follow the common container startup pattern.
+## Path handling
 
-## Endpoint contract
+PSP accepts both:
 
-Versioned Docker API paths such as `/v1.41/...` are accepted. PSP normalizes the version prefix for contract matching and forwards the original request path to the backend.
+- unversioned paths, such as `/containers/create`
+- Docker-version-prefixed paths, such as `/v1.41/containers/create`
 
-### Required endpoints
+PSP matches requests against the normalized path but forwards the original request path to the backend.
 
-| Endpoint | Method | PSP status | Notes |
+## Supported endpoints
+
+| Endpoint | Method | Supported | Notes |
 |---|---|---|---|
-| `/_ping` | `GET` | supported | daemon liveness probe |
-| `/version` | `GET` | supported | daemon capability/version probe |
-| `/info` | `GET` | supported | runtime metadata probe |
-| `/images/create` | `POST` | supported | image pull entrypoint |
-| `/containers/create` | `POST` | supported | container creation |
-| `/containers/{id}/start` | `POST` | supported | container start |
-| `/containers/{id}/json` | `GET` | supported | inspect state and networking |
-| `/containers/{id}/logs` | `GET` | supported | readiness / diagnostics logs |
-| `/containers/{id}/wait` | `POST` | supported | wait for container exit |
-| `/containers/{id}` | `DELETE` | supported | remove container |
+| `/_ping` | `GET` | yes | liveness probe |
+| `/version` | `GET` | yes | version/capability probe |
+| `/info` | `GET` | yes | runtime metadata probe |
+| `/images/create` | `POST` | yes | image pull entrypoint |
+| `/containers/create` | `POST` | yes | create container; PSP may inject labels |
+| `/containers/{id}/start` | `POST` | yes | start container |
+| `/containers/{id}/json` | `GET` | yes | inspect container; PSP rewrites `HostIp` fields |
+| `/containers/{id}/logs` | `GET` | yes | container logs |
+| `/containers/{id}/wait` | `POST` | yes | wait for exit |
+| `/containers/{id}` | `DELETE` | yes | remove container |
 
-### Optional future endpoints
+## Important PSP-specific behavior
 
-These are common candidates for later compatibility expansion but are not part of the v1 contract yet.
+### Policy enforcement
 
-| Endpoint | Method | PSP status | Rationale |
+Supported does not mean unconditionally allowed. PSP still applies policy to supported endpoints.
+
+Examples:
+
+- `POST /containers/create` is supported, but privileged containers are denied
+- `POST /images/create` is supported, but image policy can block specific images
+
+### Session labeling
+
+For container create requests, PSP may inject labels into the forwarded request:
+
+- `io.psp.managed=true`
+- `io.psp.session=<session-id>`
+
+### Port host rewriting
+
+On container inspect responses, PSP rewrites `NetworkSettings.Ports[*].HostIp` to `PSP_ADVERTISED_HOST` so the client receives a sandbox-usable connect host.
+
+## Unsupported or deferred endpoints
+
+These are common future candidates, but are not part of the current v1 contract:
+
+| Endpoint | Method | Status | Why |
 |---|---|---|---|
-| `/networks/create` | `POST` | unsupported | network policy and cleanup semantics need design |
-| `/networks/{id}` | `DELETE` | unsupported | blocked until session/network ownership model lands |
-| `/containers/{id}/stop` | `POST` | unsupported | not required for minimal happy path yet |
-| `/events` | `GET` | unsupported | streaming API not needed for MVP |
-| `/images/{name}/json` | `GET` | unsupported in current broker | may be needed once image policy and caching behavior are refined |
+| `/networks/create` | `POST` | unsupported | network policy and ownership model not implemented |
+| `/networks/{id}` | `DELETE` | unsupported | deferred until network lifecycle support exists |
+| `/containers/{id}/stop` | `POST` | unsupported | not required for MVP lifecycle |
+| `/events` | `GET` | unsupported | streaming support not required for MVP |
+| `/images/{name}/json` | `GET` | unsupported | not currently required by the supported path |
+| broad Docker surface | many | unsupported | PSP uses an explicit allowlist |
 
-### Unsupported by design in v1
+## Response/error contract
 
-| Category | Examples | Reason |
-|---|---|---|
-| Broad Docker daemon surface | build, exec, commit, swarm, plugins, volumes | outside PSP MVP scope |
-| Unsafe high-authority operations | privileged containers, host namespace joins, device requests | denied by policy baseline |
-| Arbitrary pass-through | unknown Docker endpoints | explicit allowlist is required |
+### Unsupported endpoint
 
-## Behavior contract
+Status:
 
-### Endpoint matching
+```text
+501 Not Implemented
+```
 
-- PSP accepts both unversioned and Docker-version-prefixed paths.
-- Unsupported endpoints fail fast in PSP and are **not** forwarded to Podman.
-- Unsupported endpoint responses use structured JSON with a machine-readable `kind`.
-
-Example unsupported response shape:
+Body shape:
 
 ```json
 {
@@ -82,36 +101,73 @@ Example unsupported response shape:
 }
 ```
 
-### Forwarding
+### Policy denial
 
-- Allowed requests preserve HTTP method, path, query string, headers except `Host`, and body payload.
-- PSP forwards the original versioned path when present so backend compatibility remains intact.
-- Backend response status, headers (minus hop-by-hop headers), and body are returned to the client.
+Status:
 
-### Error handling
+```text
+403 Forbidden
+```
 
-- Unsupported endpoints return `501 Not Implemented`.
-- Backend communication failures return `502 Bad Gateway`.
-- Internal PSP failures return `500 Internal Server Error`.
+Body shape:
+
+```json
+{
+  "message": "privileged containers are denied by default",
+  "kind": "policy_denied",
+  "rule_id": "PSP-POL-001"
+}
+```
+
+### Backend failure
+
+Status:
+
+```text
+502 Bad Gateway
+```
+
+Body shape includes:
+
+```json
+{
+  "kind": "backend_error"
+}
+```
+
+### Internal PSP failure
+
+Status:
+
+```text
+500 Internal Server Error
+```
+
+Body shape includes:
+
+```json
+{
+  "kind": "internal_error"
+}
+```
 
 ## Known differences from Docker Engine
 
-- PSP exposes only a curated subset of the Docker API.
-- PSP sits in front of rootless Podman, so runtime behavior may differ from Docker Engine in edge cases.
-- Policy enforcement will intentionally block some Docker request shapes even if Podman would otherwise accept them.
-- Session labeling, cleanup, audit logging, and deny rule IDs are PSP-specific behavior layered on top of the Docker-compatible surface.
+- PSP exposes only a curated subset of the Docker API
+- PSP sits in front of rootless Podman, so behavior may differ from Docker in edge cases
+- policy enforcement intentionally blocks some request shapes even if Podman would accept them
+- PSP adds session labeling, cleanup semantics, and audit logs that are not Docker Engine features
 
-## Contract verification
+## Verified by tests
 
-The broker currently includes contract tests that prove:
+The repository currently verifies this contract with:
 
-- create/start/inspect/logs/wait/remove lifecycle calls pass through PSP successfully
-- version-prefixed paths are accepted
-- unsupported endpoints fail with structured `501` responses and are not forwarded upstream
+- unit/contract coverage in `src/lib.rs`
+- integration coverage in `tests/integration_suite.rs`
 
-These tests live in:
+The integration suite covers:
 
-- `src/lib.rs` (`proxies_container_lifecycle_endpoints`)
-- `src/lib.rs` (`rejects_unsupported_endpoints_with_structured_error`)
-
-Follow-on work in `psp-287.8` should expand this into a dedicated integration and compatibility suite.
+- happy-path lifecycle flow
+- blocked privileged request path
+- parallel inspect requests
+- cleanup behavior

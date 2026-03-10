@@ -117,7 +117,7 @@ impl AppState {
         })
     }
 
-    async fn startup_sweep(&self) -> Result<(), ProxyError> {
+    pub async fn startup_sweep(&self) -> Result<(), ProxyError> {
         let response = self
             .backend
             .get_json("/containers/json?all=1&filters=%7B%22label%22%3A%5B%22io.psp.managed%3Dtrue%22%5D%7D")
@@ -138,7 +138,7 @@ impl AppState {
         Ok(())
     }
 
-    async fn cleanup_tracked_resources(&self) -> Result<(), ProxyError> {
+    pub async fn cleanup_tracked_resources(&self) -> Result<(), ProxyError> {
         if self.sessions.keep_on_failure() {
             return Ok(());
         }

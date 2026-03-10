@@ -25,6 +25,7 @@ Compatibility profile: `docs/compatibility/testcontainers-profile.md`
 - Stable deny rule IDs for blocked privileged, namespace, bind mount, device, capability, and image-policy requests
 - Inspect-response host rewriting for sandbox-reachable published ports (`PSP_ADVERTISED_HOST`)
 - Session labels, startup stale-resource sweep, and shutdown cleanup (`x-psp-session-id`, `PSP_KEEP_ON_FAILURE`)
+- Dedicated integration suite in `tests/integration_suite.rs` for happy path, blocked path, parallel inspect, and cleanup behavior
 
 ## Non-goals
 - Replacing AGS

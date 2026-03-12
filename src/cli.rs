@@ -19,7 +19,7 @@ use hyperlocal::UnixConnector;
 use podman_socket_proxy::{
     AppState, COMPATIBILITY_PROFILE, Config, Policy, ResolvedConfig, normalize_versioned_path,
     router, run_startup_checks, serve_with_shutdown,
-    session::{EFFECTIVE_SESSION_HEADER, SESSION_HEADER},
+    session::SESSION_HEADER,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -121,14 +121,18 @@ fn star_rating(count: u64) -> String {
     format!("{}{}", "★".repeat(filled), "☆".repeat(5 - filled))
 }
 
+fn access_display(access: &str) -> (&'static str, Color) {
+    match access {
+        "allowed"      => ("● ALLOWED", Color::Green),
+        "denied"       => ("✕ DENIED",  Color::Red),
+        "default-deny" => ("○ DEFAULT", Color::Yellow),
+        _              => ("◆ MANAGED", Color::Blue),
+    }
+}
+
 fn access_and_state_cells(access: &str, state_str: &str, is_running: bool) -> (Cell, Cell) {
-    let access_cell = match access {
-        "allowed"      => Cell::new("● ALLOWED").fg(Color::Green),
-        "denied"       => Cell::new("✕ DENIED").fg(Color::Red),
-        "default-deny" => Cell::new("○ DEFAULT").fg(Color::Yellow),
-        "managed"      => Cell::new("◆ MANAGED").fg(Color::Blue),
-        other          => Cell::new(other),
-    };
+    let (badge, color) = access_display(access);
+    let access_cell = Cell::new(badge).fg(color);
     let state_cell = if is_running {
         Cell::new(state_str).fg(Color::Green)
     } else {
@@ -207,8 +211,8 @@ enum PolicyCommand {
 #[derive(Subcommand, Debug)]
 enum DiscoverCommand {
     Containers(ListContainersArgs),
-    Allow(AllowContainerArgs),
-    Deny(DenyContainerArgs),
+    Allow(ContainerAccessArgs),
+    Deny(ContainerAccessArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -261,18 +265,7 @@ struct ListContainersArgs {
 }
 
 #[derive(Args, Debug)]
-struct AllowContainerArgs {
-    container: Option<String>,
-    #[arg(long, conflicts_with = "policy")]
-    project: bool,
-    #[arg(long)]
-    policy: Option<PathBuf>,
-    #[arg(long, help = "Show what would change without modifying the policy file")]
-    dry_run: bool,
-}
-
-#[derive(Args, Debug)]
-struct DenyContainerArgs {
+struct ContainerAccessArgs {
     container: Option<String>,
     #[arg(long, conflicts_with = "policy")]
     project: bool,
@@ -411,7 +404,7 @@ pub async fn run() -> Result<()> {
 
 fn section(label: &str) {
     if io::stdout().is_terminal() {
-        let bar_len = 40usize.saturating_sub(label.len() + 3);
+        let bar_len = 40usize.saturating_sub(label.len() + 4);
         println!("\n  {} {} {}", col_bold("──"), col_bold(label), col_dim(&"─".repeat(bar_len)));
     } else {
         println!("\n[{}]", label);
@@ -817,21 +810,11 @@ async fn discover_browser() -> Result<()> {
             .default(0)
             .interact()?;
 
+        let policy_path = global_policy_path(&resolved)?;
         match selection {
-            0 => {
-                let resolved = Config::resolve_from_env()?;
-                let policy_path = global_policy_path(&resolved)?;
-                mutate_container_access(None, false, Some(policy_path), true, false).await?;
-            }
-            1 => {
-                let resolved = Config::resolve_from_env()?;
-                let policy_path = global_policy_path(&resolved)?;
-                mutate_container_access(None, false, Some(policy_path), false, false).await?;
-            }
-            2 => {
-                // Refresh — loop continues
-                continue;
-            }
+            0 => mutate_container_access(None, false, Some(policy_path), true, false).await?,
+            1 => mutate_container_access(None, false, Some(policy_path), false, false).await?,
+            2 => continue, // Refresh — loop continues
             _ => break,
         }
     }
@@ -1022,7 +1005,7 @@ fn select_containers_interactively<'a>(
     println!("{} container(s) available:", col_bold(&total.to_string()));
     println!();
 
-    let items: Vec<String> = candidates.iter().map(|candidate| candidate.label.clone()).collect();
+    let items: Vec<&str> = candidates.iter().map(|candidate| candidate.label.as_str()).collect();
     let prompt = if allow {
         "Select containers to ALLOW (space to toggle, enter to confirm)"
     } else {
@@ -1073,13 +1056,7 @@ fn format_interactive_container_label(
     container: &podman_socket_proxy::backend::DiscoveredContainer,
     access: &str,
 ) -> String {
-    let badge = match access {
-        "allowed"      => "● ALLOWED",
-        "denied"       => "✕ DENIED",
-        "default-deny" => "○ DEFAULT",
-        "managed"      => "◆ MANAGED",
-        other          => other,
-    };
+    let (badge, _) = access_display(access);
     let state_str = container.state.as_deref()
         .unwrap_or(container.status.as_deref().unwrap_or("?"));
     format!(
@@ -1110,6 +1087,25 @@ struct InteractiveCandidate<'a> {
 
 // ── search_images / allow_image ───────────────────────────────────────────────
 
+fn hub_result_row(result: &DockerHubSearchResult, desc_max: usize) -> [Cell; 4] {
+    let official_cell = if result.is_official {
+        Cell::new("✓ OFFICIAL").fg(Color::Green)
+    } else {
+        Cell::new("").fg(Color::DarkGrey)
+    };
+    let stars_cell = Cell::new(star_rating(result.star_count))
+        .fg(Color::Yellow)
+        .set_alignment(CellAlignment::Center);
+    let desc = result.short_description.as_deref().unwrap_or("").replace('\t', " ");
+    let desc = if desc.len() > desc_max { format!("{}…", &desc[..desc_max - 3]) } else { desc };
+    let name_cell = if result.is_official {
+        Cell::new(&result.repo_name).add_attribute(Attribute::Bold)
+    } else {
+        Cell::new(&result.repo_name)
+    };
+    [name_cell, official_cell, stars_cell, Cell::new(desc)]
+}
+
 async fn search_images(args: SearchImagesArgs) -> Result<()> {
     let spinner = make_spinner(format!("Searching Docker Hub for '{}'…", args.query));
 
@@ -1133,29 +1129,7 @@ async fn search_images(args: SearchImagesArgs) -> Result<()> {
     if let Some(mut table) = make_table(&["NAME", "OFFICIAL", "STARS", "DESCRIPTION"]) {
         table.column_mut(3).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(60)));
         for result in &body.results {
-            let official_cell = if result.is_official {
-                Cell::new("✓ OFFICIAL").fg(Color::Green)
-            } else {
-                Cell::new("").fg(Color::DarkGrey)
-            };
-            let stars_cell = Cell::new(star_rating(result.star_count))
-                .fg(Color::Yellow)
-                .set_alignment(CellAlignment::Center);
-            let desc = result.short_description.as_deref().unwrap_or("").replace('\t', " ");
-            let desc = if desc.len() > 60 { format!("{}…", &desc[..57]) } else { desc };
-
-            let name_cell = if result.is_official {
-                Cell::new(&result.repo_name).add_attribute(Attribute::Bold)
-            } else {
-                Cell::new(&result.repo_name)
-            };
-
-            table.add_row(vec![
-                name_cell,
-                official_cell,
-                stars_cell,
-                Cell::new(desc),
-            ]);
+            table.add_row(hub_result_row(result, 60));
         }
         println!("{table}");
     } else {
@@ -1212,22 +1186,7 @@ async fn allow_image(args: AllowImageArgs) -> Result<()> {
         if let Some(mut table) = make_table(&["NAME", "OFFICIAL", "STARS", "DESCRIPTION"]) {
             table.column_mut(3).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(55)));
             for result in &body.results {
-                let official_cell = if result.is_official {
-                    Cell::new("✓ OFFICIAL").fg(Color::Green)
-                } else {
-                    Cell::new("").fg(Color::DarkGrey)
-                };
-                let stars_cell = Cell::new(star_rating(result.star_count))
-                    .fg(Color::Yellow)
-                    .set_alignment(CellAlignment::Center);
-                let desc = result.short_description.as_deref().unwrap_or("").replace('\t', " ");
-                let desc = if desc.len() > 55 { format!("{}…", &desc[..52]) } else { desc };
-                let name_cell = if result.is_official {
-                    Cell::new(&result.repo_name).add_attribute(Attribute::Bold)
-                } else {
-                    Cell::new(&result.repo_name)
-                };
-                table.add_row(vec![name_cell, official_cell, stars_cell, Cell::new(desc)]);
+                table.add_row(hub_result_row(result, 55));
             }
             println!("{table}");
         }
@@ -1529,9 +1488,8 @@ async fn cleanup(args: CleanupArgs) -> Result<()> {
         .map_err(|error| anyhow!("failed to list containers: {error:?}"))?;
 
     containers.retain(|c| c.metadata.managed);
-    if let Some(ref session_filter) = args.session {
-        // We can't filter by session without label data, note this limitation
-        let _ = session_filter;
+    if args.session.is_some() {
+        println!("{} --session filter is not yet supported; listing all PSP-managed containers", col_warn("!"));
     }
 
     if containers.is_empty() {
@@ -1622,11 +1580,7 @@ async fn psp_init(args: InitArgs) -> Result<()> {
             println!("  {} Created config: {}", col_ok("✓"), config_path.display());
         }
 
-        println!();
-        println!("{}", col_bold("Next steps:"));
-        println!("  1. Start PSP:          psp run");
-        println!("  2. Set DOCKER_HOST:    eval $(psp env)");
-        println!("  3. Verify:             psp doctor");
+        print_next_steps(false);
     } else {
         // Global setup
         let config_dir = dirs_or_default();
@@ -1663,16 +1617,22 @@ async fn psp_init(args: InitArgs) -> Result<()> {
             println!("  {} Created config: {}", col_ok("✓"), config_path.display());
         }
 
-        println!();
-        println!("{}", col_bold("Next steps:"));
-        println!("  1. Start PSP:          psp run");
-        println!("  2. Set DOCKER_HOST:    eval $(psp env)");
-        println!("  3. Verify:             psp doctor");
-        println!();
-        println!("  Tip: run 'psp init --profile workspace-postgres' for a Testcontainers starter policy");
+        print_next_steps(true);
     }
 
     Ok(())
+}
+
+fn print_next_steps(show_tip: bool) {
+    println!();
+    println!("{}", col_bold("Next steps:"));
+    println!("  1. Start PSP:          psp run");
+    println!("  2. Set DOCKER_HOST:    eval $(psp env)");
+    println!("  3. Verify:             psp doctor");
+    if show_tip {
+        println!();
+        println!("  Tip: run 'psp init --profile workspace-postgres' for a Testcontainers starter policy");
+    }
 }
 
 fn dirs_or_default() -> PathBuf {
@@ -1765,15 +1725,8 @@ async fn request_text(
     let request = builder.body(Full::new(bytes::Bytes::new())).unwrap();
     let response = client.request(request).await?;
     let status = response.status();
-    let effective_session = response
-        .headers()
-        .get(EFFECTIVE_SESSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
     let bytes = response.into_body().collect().await?.to_bytes();
     let body = String::from_utf8(bytes.to_vec())?;
-    let _ = effective_session;
     Ok((status, body))
 }
 

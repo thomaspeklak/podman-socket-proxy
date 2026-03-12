@@ -97,15 +97,14 @@ impl AppState {
     }
 
     pub async fn cleanup_tracked_resources(&self) -> Result<(), ProxyError> {
+        let ids = self.sessions.tracked_container_ids();
         if self.sessions.keep_on_failure() {
-            let ids = self.sessions.tracked_container_ids();
             if !ids.is_empty() {
                 info!(count = ids.len(), "shutdown cleanup skipped: keep_on_failure=true, leaving containers");
             }
             return Ok(());
         }
 
-        let ids = self.sessions.tracked_container_ids();
         if !ids.is_empty() {
             info!(count = ids.len(), "shutdown cleanup: removing psp-managed containers");
         }
@@ -231,12 +230,11 @@ pub async fn run_startup_checks(config: &Config) -> Result<()> {
 }
 
 async fn remove_existing_socket(path: &Path) -> Result<()> {
-    if path.exists() {
-        tokio::fs::remove_file(path)
-            .await
-            .with_context(|| format!("failed to remove stale socket {}", path.display()))?;
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow!("failed to remove stale socket {}: {e}", path.display())),
     }
-    Ok(())
 }
 
 pub async fn shutdown_signal() {

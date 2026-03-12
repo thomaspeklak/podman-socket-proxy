@@ -86,7 +86,7 @@ impl SessionManager {
             .unwrap_or("anonymous")
             .to_string();
         let provided = raw.is_some();
-        let valid = raw.as_deref().map(sanitize_session_id).unwrap_or("anonymous") != "anonymous";
+        let valid = effective != "anonymous";
 
         SessionContext {
             raw,
@@ -116,8 +116,10 @@ impl SessionManager {
     }
 
     pub fn tracked_container_ids(&self) -> Vec<String> {
-        let state = self.tracked.lock().unwrap();
-        let mut ids: Vec<_> = state.containers.keys().cloned().collect();
+        let mut ids: Vec<_> = {
+            let state = self.tracked.lock().unwrap();
+            state.containers.keys().cloned().collect()
+        };
         ids.sort();
         ids
     }

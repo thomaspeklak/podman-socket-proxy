@@ -346,19 +346,18 @@ impl ContainerAccessPolicy {
     fn matches_any(
         &self,
         raw_entries: &[String],
-        _normalized_entries: &[String],
+        normalized_entries: &[String],
         container: &ContainerMetadata,
     ) -> bool {
         let candidates = container.match_candidates();
+        if raw_entries.iter().any(|entry| candidates.contains(&entry.as_str())) {
+            return true;
+        }
         let normalized_candidates: Vec<String> = candidates
             .iter()
             .map(|candidate| normalize_container_ref(candidate))
             .collect();
-        raw_entries.iter().any(|entry| {
-            let normalized_entry = normalize_container_ref(entry);
-            candidates.contains(&entry.as_str())
-                || normalized_candidates.iter().any(|candidate| candidate == &normalized_entry)
-        })
+        normalized_entries.iter().any(|norm| normalized_candidates.contains(norm))
     }
 }
 
@@ -517,6 +516,7 @@ fn upsert_sorted(entries: &mut Vec<String>, value: &str) {
 
 fn remove_matching(entries: &mut Vec<String>, value: &str) {
     let normalized = normalize_container_ref(value);
+    let normalized_image = normalize_image_ref(value);
     entries.retain(|entry| {
         if entry == value {
             return false;
@@ -524,7 +524,7 @@ fn remove_matching(entries: &mut Vec<String>, value: &str) {
         if normalize_container_ref(entry) == normalized {
             return false;
         }
-        if normalize_image_ref(entry) == normalize_image_ref(value) && entry.contains(':') {
+        if entry.contains(':') && normalize_image_ref(entry) == normalized_image {
             return false;
         }
         true

@@ -6,5 +6,9 @@
   "images": {
     "allowlist": [],
     "denylist": []
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }

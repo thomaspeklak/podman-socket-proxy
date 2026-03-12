@@ -36,12 +36,15 @@ AGS should generate a stable session ID per sandbox or test run and attach it to
 x-psp-session-id: <session-id>
 ```
 
+If operators enable `PSP_REQUIRE_SESSION_ID=true`, mutating requests without a valid session ID are rejected.
+
 PSP uses this for:
 
 - resource labeling
 - audit log attribution
 - shutdown cleanup tracking
 - crash-recovery ownership context
+- client-visible effective session diagnostics via `x-psp-effective-session-id`
 
 ## AGS responsibilities vs PSP responsibilities
 
@@ -67,11 +70,14 @@ When PSP blocks a request, AGS should preserve and surface at least:
 - `kind`
 - `message`
 - `rule_id` when present
+- `hint` when present
+- `request_id`
 
 This allows AGS to distinguish:
 
 - unsupported endpoint (`501 unsupported_endpoint`)
 - policy denial (`403 policy_denied`)
+- missing required session (`400 session_required`)
 - backend error (`502 backend_error`)
 - internal PSP error (`500 internal_error`)
 
@@ -81,7 +87,11 @@ This allows AGS to distinguish:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000001",
+  "session_id": "sess-42"
 }
 ```
 

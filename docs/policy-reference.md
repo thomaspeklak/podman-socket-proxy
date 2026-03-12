@@ -19,6 +19,10 @@ Current schema version:
   "images": {
     "allowlist": [],
     "denylist": []
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }
 ```
@@ -86,6 +90,40 @@ Example:
 }
 ```
 
+### `containers.allowlist`
+
+List of exact container identifiers or names that PSP may access when the target container was not created and managed by PSP itself.
+
+Typical entries are added through discovery mode:
+
+```json
+{
+  "containers": {
+    "allowlist": ["shared-db", "1a2b3c4d5e6f"]
+  }
+}
+```
+
+Behavior notes:
+
+- PSP-managed containers are always accessible
+- pre-existing backend containers are denied by default unless explicitly allowlisted
+- entries may be a full container ID, a stable short ID you choose to store, or a container name
+
+### `containers.denylist`
+
+List of exact container identifiers or names that PSP must block even if they would otherwise be accessible.
+
+Example:
+
+```json
+{
+  "containers": {
+    "denylist": ["prod-db"]
+  }
+}
+```
+
 ## Evaluation order
 
 For image policy:
@@ -103,6 +141,12 @@ For container create policy:
 6. deny non-allowlisted bind mounts
 7. apply image policy
 
+For access to existing containers:
+
+1. allow PSP-managed containers
+2. check explicit denylist matches
+3. require an explicit allowlist match for non-managed containers
+
 ## Stable rule IDs
 
 | Rule ID | Meaning |
@@ -115,6 +159,8 @@ For container create policy:
 | `PSP-POL-005` | capability additions denied |
 | `PSP-POL-006` | image denied by denylist |
 | `PSP-POL-007` | image missing from allowlist |
+| `PSP-POL-008` | container denied by denylist |
+| `PSP-POL-009` | container missing from allowlist |
 
 ## Concrete examples
 
@@ -127,6 +173,10 @@ For container create policy:
     "allowlist": []
   },
   "images": {
+    "allowlist": [],
+    "denylist": []
+  },
+  "containers": {
     "allowlist": [],
     "denylist": []
   }
@@ -144,6 +194,10 @@ For container create policy:
   "images": {
     "allowlist": ["postgres:16", "redis:7"],
     "denylist": []
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }
 ```
@@ -159,6 +213,29 @@ For container create policy:
   "images": {
     "allowlist": [],
     "denylist": ["alpine:latest"]
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
+  }
+}
+```
+
+### Allow access to a shared local database container
+
+```json
+{
+  "version": "v1",
+  "bind_mounts": {
+    "allowlist": ["/workspace"]
+  },
+  "images": {
+    "allowlist": ["postgres:16"],
+    "denylist": []
+  },
+  "containers": {
+    "allowlist": ["shared-db"],
+    "denylist": ["prod-db"]
   }
 }
 ```
@@ -218,6 +295,32 @@ Expected denial:
   "rule_id": "PSP-POL-001",
   "message": "privileged containers are denied by default"
 }
+```
+
+### Denied access to a discovered but unallowlisted container
+
+Expected denial:
+
+```json
+{
+  "kind": "policy_denied",
+  "rule_id": "PSP-POL-009",
+  "message": "container is not present in the allowlist: shared-db"
+}
+```
+
+## Fast policy workflows
+
+```bash
+psp policy check policy/default-policy.json
+psp policy explain --request-file /tmp/create.json
+psp policy init /tmp/psp-policy.json --profile workspace-postgres
+psp discover containers
+psp discover allow
+psp discover allow --project
+psp discover allow shared-db
+psp images search postgres
+psp images allow postgres:16
 ```
 
 ## Example files in this repo

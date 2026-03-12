@@ -39,8 +39,48 @@ export PSP_POLICY_FILE="policy/default-policy.json"
 export PSP_ADVERTISED_HOST="127.0.0.1"
 export RUST_LOG=info
 
-cargo run --bin psp
+cargo run --bin psp -- run
 ```
+
+You can also use the helper commands:
+
+```bash
+cargo run --bin psp -- doctor
+cargo run --bin psp -- config show
+cargo run --bin psp -- smoke-test --image postgres:16
+```
+
+### Optional: move repeated settings into config files
+
+PSP loads config in this precedence order:
+
+1. built-in defaults
+2. `~/.config/psp/config.json`
+3. `<repo-root>/.psp.json`
+4. environment variables
+
+Example global config:
+
+```json
+{
+  "backend": "unix:///run/user/1000/podman/podman.sock",
+  "listen_socket": "/tmp/psp.sock",
+  "advertised_host": "127.0.0.1",
+  "require_session_id": false
+}
+```
+
+Example project config:
+
+```json
+{
+  "policy_path": "policy/default-policy.json",
+  "advertised_host": "host.containers.internal",
+  "require_session_id": true
+}
+```
+
+PSP walks upward from the current directory to find `.git`. In git worktrees it resolves the shared repository root and loads `.psp.json` from there.
 
 ## Step 4: point clients at PSP
 
@@ -59,11 +99,13 @@ curl --unix-socket /tmp/psp.sock http://d/version
 
 ## Step 5: create a test session
 
-PSP accepts an optional session header:
+PSP accepts a session header:
 
 ```text
 x-psp-session-id: demo-session-1
 ```
+
+If `PSP_REQUIRE_SESSION_ID=true`, mutating requests without a valid session ID are rejected with `400 session_required`.
 
 Example:
 
@@ -116,7 +158,7 @@ See:
 
 ### `403 policy_denied`
 
-The request matched a policy rule. Inspect `rule_id` in the response and the PSP logs.
+The request matched a policy rule. Inspect `rule_id`, `hint`, and `request_id` in the response and correlate with the PSP logs.
 
 See:
 - `docs/policy-reference.md`

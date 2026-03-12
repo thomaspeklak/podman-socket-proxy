@@ -43,7 +43,15 @@ export PSP_POLICY_FILE="policy/default-policy.json"
 export PSP_ADVERTISED_HOST="127.0.0.1"
 export RUST_LOG=info
 
-cargo run --bin psp
+cargo run --bin psp -- run
+```
+
+Helpful operator commands:
+
+```bash
+cargo run --bin psp -- doctor
+cargo run --bin psp -- config show
+cargo run --bin psp -- smoke-test --image postgres:16
 ```
 
 Optional debug override:
@@ -63,8 +71,10 @@ export DOCKER_HOST="unix:///tmp/psp.sock"
 1. confirm the Podman socket exists
 2. confirm the PSP policy file exists and is valid JSON
 3. choose an appropriate `PSP_ADVERTISED_HOST`
-4. start PSP with `RUST_LOG=info`
-5. probe `/_ping` through the PSP socket
+4. run `psp doctor`
+5. start PSP with `RUST_LOG=info`
+6. optionally run `psp smoke-test`
+7. probe `/_ping` through the PSP socket
 
 Example probe:
 
@@ -87,7 +97,56 @@ OK
 | `PSP_POLICY_FILE` | `policy/default-policy.json` | schema-validated policy file |
 | `PSP_ADVERTISED_HOST` | `127.0.0.1` | host value returned in inspect port bindings |
 | `PSP_KEEP_ON_FAILURE` | `false` | skip shutdown cleanup for debugging |
+| `PSP_REQUIRE_SESSION_ID` | `false` | require a valid session ID on mutating requests |
 | `RUST_LOG` | unset | standard `tracing` filter |
+
+## Config resolution order
+
+PSP resolves configuration with the following precedence:
+
+1. built-in defaults
+2. global config file: `~/.config/psp/config.json`
+3. project config file: `<repo-root>/.psp.json`
+4. environment variable overrides
+
+Operational notes:
+
+- PSP walks upward from the current working directory until it finds `.git`
+- in git worktrees, PSP resolves the shared repository root and loads `.psp.json` from there
+- relative paths inside config files are resolved relative to the config file location
+- environment variables remain the highest-precedence escape hatch for one-off runs
+
+## Discovery and quick policy updates
+
+List running or stopped containers visible to the configured backend:
+
+```bash
+cargo run --bin psp -- discover containers
+```
+
+Explicitly allow or deny access to a pre-existing container:
+
+```bash
+cargo run --bin psp -- discover allow
+cargo run --bin psp -- discover deny
+cargo run --bin psp -- discover allow shared-db
+cargo run --bin psp -- discover deny shared-db
+```
+
+When run in a terminal without an explicit container argument, `discover allow` and `discover deny` open an interactive multi-select picker.
+
+Scope rules:
+
+- by default, discovery writes go to the global policy target
+- pass `--project` to write into the project-local policy target
+- pass `--policy <path>` to override both and write to an explicit file
+
+Search Docker Hub and add an approved image to the allowlist:
+
+```bash
+cargo run --bin psp -- images search postgres
+cargo run --bin psp -- images allow postgres:16
+```
 
 ## Supported endpoint surface
 
@@ -199,7 +258,11 @@ Response:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000001",
+  "session_id": "anonymous"
 }
 ```
 

@@ -55,6 +55,7 @@ Examples:
 
 - `POST /containers/create` is supported, but privileged containers are denied
 - `POST /images/create` is supported, but image policy can block specific images
+- `GET /containers/{id}/json` is supported, but access to pre-existing non-PSP-managed containers is denied unless explicitly allowlisted
 
 ### Session labeling
 
@@ -62,6 +63,8 @@ For container create requests, PSP may inject labels into the forwarded request:
 
 - `io.psp.managed=true`
 - `io.psp.session=<session-id>`
+
+When configured with `PSP_REQUIRE_SESSION_ID=true`, PSP rejects mutating requests that do not provide a valid session ID.
 
 ### Port host rewriting
 
@@ -97,7 +100,11 @@ Body shape:
   "message": "unsupported endpoint: POST /v1.41/networks/create",
   "kind": "unsupported_endpoint",
   "method": "POST",
-  "path": "/v1.41/networks/create"
+  "path": "/v1.41/networks/create",
+  "hint": "Use only the documented Testcontainers-compatible PSP API subset.",
+  "docs": "docs/compatibility/testcontainers-profile.md",
+  "request_id": "psp-00000002",
+  "session_id": "anonymous"
 }
 ```
 
@@ -115,7 +122,27 @@ Body shape:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000001",
+  "session_id": "sess-42"
+}
+```
+
+### Missing required session
+
+Status:
+
+```text
+400 Bad Request
+```
+
+Body shape includes:
+
+```json
+{
+  "kind": "session_required"
 }
 ```
 

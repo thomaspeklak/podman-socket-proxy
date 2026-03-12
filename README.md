@@ -34,7 +34,8 @@ PSP restores an explicit trust boundary:
 - schema-validated JSON policy file
 - deny-by-default enforcement for privileged mode, host namespaces, devices, capability adds, and non-allowlisted bind mounts
 - image allowlist / denylist controls
-- stable deny rule IDs with human-readable messages
+- explicit allow / deny policy for pre-existing backend containers discovered through CLI workflows
+- stable deny rule IDs with human-readable messages and remediation hints
 
 ### Session and cleanup behavior
 - session identity from `x-psp-session-id`
@@ -73,8 +74,10 @@ export PSP_LISTEN_SOCKET="/tmp/psp.sock"
 export PSP_POLICY_FILE="policy/default-policy.json"
 export PSP_ADVERTISED_HOST="127.0.0.1"
 
-cargo run --bin psp
+cargo run --bin psp -- run
 ```
+
+For backward-compatible behavior, `cargo run --bin psp` also starts the server directly.
 
 ### 4. Point Docker-compatible clients at PSP
 
@@ -97,7 +100,81 @@ export PSP_KEEP_ON_FAILURE=true
 | `PSP_POLICY_FILE` | `policy/default-policy.json` | JSON policy file loaded on startup |
 | `PSP_ADVERTISED_HOST` | `127.0.0.1` | host value injected into inspect port mappings |
 | `PSP_KEEP_ON_FAILURE` | `false` | skip shutdown cleanup for debugging |
+| `PSP_REQUIRE_SESSION_ID` | `false` | require a valid `x-psp-session-id` on mutating requests |
 | `RUST_LOG` | unset | standard `tracing` filter, e.g. `info` or `debug` |
+
+## Configuration layering
+
+PSP resolves configuration in this order:
+
+1. built-in defaults
+2. global config file: `~/.config/psp/config.json`
+3. project config file: `<repo-root>/.psp.json`
+4. environment variable overrides
+
+### Project root discovery
+
+PSP walks upward from the current working directory until it finds `.git`.
+
+- if `.git` is a directory, that directory's parent is the project root
+- if `.git` is a file, PSP resolves the referenced gitdir
+- for git worktrees, PSP resolves the shared repository root where the real `.git` directory lives and loads `<shared-repo-root>/.psp.json`
+
+### Config file format
+
+Both config files use JSON.
+
+Global example:
+
+```json
+{
+  "backend": "unix:///run/user/1000/podman/podman.sock",
+  "listen_socket": "/tmp/psp.sock",
+  "policy_path": "/home/tom/code/podman-socket-proxy/policy/default-policy.json",
+  "advertised_host": "127.0.0.1",
+  "keep_on_failure": false
+}
+```
+
+Project example:
+
+```json
+{
+  "policy_path": "policy/default-policy.json",
+  "advertised_host": "host.containers.internal",
+  "require_session_id": true
+}
+```
+
+Relative filesystem paths in config files are resolved relative to the config file location.
+
+## Operator CLI
+
+```bash
+psp run
+psp doctor
+psp config show
+psp smoke-test --image postgres:16
+psp policy check policy/default-policy.json
+psp policy explain --request-file /tmp/create.json
+psp policy init /tmp/psp-policy.json --profile workspace-postgres
+psp discover containers
+psp discover allow
+psp discover allow --project
+psp discover allow shared-db
+psp images search postgres
+psp images allow postgres:16
+```
+
+Highlights:
+
+- `psp doctor` validates resolved config, policy loading, and backend reachability
+- `psp config show` prints the effective layered config and detected config sources
+- `psp smoke-test` exercises a daemon probe, a representative denial path, and a create/remove lifecycle path
+- `psp discover allow` and `psp discover deny` open an interactive multi-select list in a terminal when no container is passed explicitly
+- discovery writes default to the global policy target; pass `--project` to store selections in the project-local policy
+- `psp discover ...` lists currently running or stopped containers and updates explicit access policy for pre-existing containers
+- `psp images ...` searches Docker Hub and adds approved images to policy allowlists
 
 ## Supported Docker-compatible endpoints
 
@@ -130,6 +207,10 @@ cat > /tmp/psp-policy.json <<'JSON'
   "images": {
     "allowlist": ["postgres:16", "redis:7"],
     "denylist": ["alpine:latest"]
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }
 JSON
@@ -166,7 +247,11 @@ Expected response shape:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000001",
+  "session_id": "sess-demo"
 }
 ```
 

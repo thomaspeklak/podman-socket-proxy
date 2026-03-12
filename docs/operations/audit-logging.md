@@ -29,11 +29,12 @@ Allow logs include fields such as:
 - `target_image`
 - `target_container`
 - `status`
+- `request_id`
 
 Example shape:
 
 ```text
-decision=allow session=sess-42 operation=containers.create path=/v1.41/containers/create target_image=postgres:16 status=201 psp forwarded request
+decision=allow request_id=psp-00000001 session=sess-42 operation=containers.create path=/v1.41/containers/create target_image=postgres:16 status=201 psp forwarded request
 ```
 
 ## Deny log fields
@@ -49,11 +50,12 @@ Deny logs include fields such as:
 - `target_image`
 - `target_container`
 - `reason` for policy denials
+- `request_id`
 
 Example shape:
 
 ```text
-decision=deny kind=policy_denied rule_id=PSP-POL-001 session=sess-42 operation=containers.create path=/v1.41/containers/create target_image=postgres:16 reason="privileged containers are denied by default" psp denied request
+decision=deny kind=policy_denied rule_id=PSP-POL-001 request_id=psp-00000002 session=sess-42 operation=containers.create path=/v1.41/containers/create target_image=postgres:16 reason="privileged containers are denied by default" psp denied request
 ```
 
 ## Operation names currently emitted
@@ -93,6 +95,7 @@ Policy denials return structured responses with:
 - `kind=policy_denied`
 - `rule_id=<stable-id>`
 - human-readable `message`
+- remediation metadata such as `hint`, `docs`, and `request_id`
 
 Example:
 
@@ -100,7 +103,11 @@ Example:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000002",
+  "session_id": "sess-42"
 }
 ```
 
@@ -111,7 +118,11 @@ Unsupported endpoints return:
   "message": "unsupported endpoint: POST /v1.41/networks/create",
   "kind": "unsupported_endpoint",
   "method": "POST",
-  "path": "/v1.41/networks/create"
+  "path": "/v1.41/networks/create",
+  "hint": "Use only the documented Testcontainers-compatible PSP API subset.",
+  "docs": "docs/compatibility/testcontainers-profile.md",
+  "request_id": "psp-00000003",
+  "session_id": "anonymous"
 }
 ```
 

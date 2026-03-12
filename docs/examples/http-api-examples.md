@@ -128,7 +128,11 @@ Expected response:
 {
   "message": "privileged containers are denied by default",
   "kind": "policy_denied",
-  "rule_id": "PSP-POL-001"
+  "rule_id": "PSP-POL-001",
+  "hint": "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+  "docs": "docs/policy-reference.md",
+  "request_id": "psp-00000001",
+  "session_id": "blocked-session-1"
 }
 ```
 
@@ -149,6 +153,10 @@ Expected response:
   "message": "unsupported endpoint: POST /v1.41/networks/create",
   "kind": "unsupported_endpoint",
   "method": "POST",
-  "path": "/v1.41/networks/create"
+  "path": "/v1.41/networks/create",
+  "hint": "Use only the documented Testcontainers-compatible PSP API subset.",
+  "docs": "docs/compatibility/testcontainers-profile.md",
+  "request_id": "psp-00000002",
+  "session_id": "anonymous"
 }
 ```

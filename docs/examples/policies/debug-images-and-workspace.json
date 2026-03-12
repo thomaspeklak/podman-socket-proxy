@@ -6,5 +6,9 @@
   "images": {
     "allowlist": [],
     "denylist": ["alpine:latest"]
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }

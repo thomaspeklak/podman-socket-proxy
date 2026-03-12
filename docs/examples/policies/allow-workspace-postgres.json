@@ -6,5 +6,9 @@
   "images": {
     "allowlist": ["postgres:16", "redis:7"],
     "denylist": []
+  },
+  "containers": {
+    "allowlist": [],
+    "denylist": []
   }
 }

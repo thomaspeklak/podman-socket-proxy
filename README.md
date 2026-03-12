@@ -1,5 +1,11 @@
 # podman-socket-proxy
 
+<img src="psp-logo.webp" width="300" alt="PSP logo">
+
+> [!WARNING]
+> **Experimental — not production-ready.**
+> PSP is under active development. APIs, policy schema, and CLI flags may change without notice. Do not rely on it in production or security-sensitive environments without reviewing the current source.
+
 `podman-socket-proxy` (binary: `psp`) is a policy-gated, Docker-compatible proxy that sits between sandboxed clients and a rootless Podman API.
 
 PSP is designed for the case where you want Docker/Testcontainers-style workflows without giving an untrusted sandbox direct access to the host Podman socket.

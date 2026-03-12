@@ -61,6 +61,7 @@ Behavior notes:
 - `/workspace` allows `/workspace` and `/workspace/...`
 - relative paths are invalid
 - an empty allowlist means all bind mounts are denied
+- PSP lexically resolves `..` and `.` in bind sources before comparing, so `/workspace/../etc/shadow` is evaluated as `/etc/shadow` and denied
 
 ### `images.allowlist`
 

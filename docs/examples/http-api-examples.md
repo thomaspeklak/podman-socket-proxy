@@ -6,6 +6,7 @@ Assumptions:
 
 - PSP listens on `/tmp/psp.sock`
 - a Docker-compatible client would normally use `DOCKER_HOST=unix:///tmp/psp.sock`
+- request bodies are limited to 4 MB; larger payloads receive a `413` response
 
 ## Probe daemon health
 
@@ -122,7 +123,14 @@ curl --unix-socket /tmp/psp.sock \
   }'
 ```
 
-Expected response:
+Expected response headers:
+
+```
+x-psp-request-id: psp-00000001
+x-psp-effective-session-id: blocked-session-1
+```
+
+Expected response body:
 
 ```json
 {
@@ -135,6 +143,8 @@ Expected response:
   "session_id": "blocked-session-1"
 }
 ```
+
+PSP injects `x-psp-request-id` and `x-psp-effective-session-id` on every response, including allowed ones.
 
 ## Example blocked request: unsupported endpoint
 

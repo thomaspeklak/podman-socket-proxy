@@ -58,6 +58,17 @@ to skip shutdown cleanup and intentionally keep managed containers for debugging
 
 On the next normal PSP start, the startup sweep will still remove stale managed containers.
 
+## Response headers
+
+PSP injects two headers on every response (allowed and denied alike):
+
+| Header | Value |
+|--------|-------|
+| `x-psp-request-id` | Stable per-request identifier (e.g. `psp-00000001`). Use for log correlation. |
+| `x-psp-effective-session-id` | The session ID PSP actually used — either the value from `x-psp-session-id` or `anonymous`. |
+
+`x-psp-effective-session-id` is useful when the client needs to confirm which session PSP attributed the request to, especially when no session header was sent.
+
 ## Example request flow
 
 1. client sends `x-psp-session-id: sess-123`

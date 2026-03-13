@@ -23,6 +23,10 @@ pub fn is_supported_endpoint(method: &Method, normalized: &str) -> bool {
             true
         }
         ("POST", "/containers/create") => true,
+        _ if normalized.starts_with("/images/") && normalized.ends_with("/json") => {
+            // GET /images/{name}/json — image inspect; name may contain slashes (org/image)
+            method.as_str() == "GET" && path_segment_count(normalized) >= 3
+        }
         _ if normalized.starts_with("/containers/") => {
             let segments = path_segment_count(normalized);
             match (method.as_str(), segments) {

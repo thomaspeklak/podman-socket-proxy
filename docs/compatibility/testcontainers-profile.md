@@ -41,6 +41,7 @@ PSP matches requests against the normalized path but forwards the original reque
 | `/containers/create` | `POST` | yes | create container; PSP may inject labels |
 | `/containers/{id}/start` | `POST` | yes | start container |
 | `/containers/{id}/json` | `GET` | yes | inspect container; PSP rewrites `HostIp` fields |
+| `/images/{name}/json` | `GET` | yes | image inspect; name may contain slashes (e.g. `org/image:tag`) |
 | `/containers/{id}/logs` | `GET` | yes | container logs |
 | `/containers/{id}/wait` | `POST` | yes | wait for exit |
 | `/containers/{id}` | `DELETE` | yes | remove container |
@@ -80,7 +81,7 @@ These are common future candidates, but are not part of the current v1 contract:
 | `/networks/{id}` | `DELETE` | unsupported | deferred until network lifecycle support exists |
 | `/containers/{id}/stop` | `POST` | unsupported | not required for MVP lifecycle |
 | `/events` | `GET` | unsupported | streaming support not required for MVP |
-| `/images/{name}/json` | `GET` | unsupported | not currently required by the supported path |
+| `/images/{name}/json` | `GET` | supported | moved to supported endpoints above |
 | broad Docker surface | many | unsupported | PSP uses an explicit allowlist |
 
 ## Response/error contract

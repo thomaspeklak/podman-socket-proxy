@@ -363,6 +363,27 @@ fn rejects_deep_nested_container_paths() {
 }
 
 #[test]
+fn accepts_image_inspect_paths() {
+    // simple image name
+    assert!(is_supported_endpoint(&Method::GET, "/images/postgres:16/json"));
+    // namespaced image (org/name:tag) — name has a slash, so path has 4 segments
+    assert!(is_supported_endpoint(
+        &Method::GET,
+        "/images/timescale/timescaledb:2.24.0-pg16/json"
+    ));
+    // versioned prefix is stripped before matching
+    assert!(is_supported_endpoint(
+        &Method::GET,
+        &normalize_versioned_path("/v1.41/images/postgres:16/json")
+    ));
+    // /images/json (list) must NOT match
+    assert!(!is_supported_endpoint(&Method::GET, "/images/json"));
+    // wrong method
+    assert!(!is_supported_endpoint(&Method::DELETE, "/images/postgres:16/json"));
+    assert!(!is_supported_endpoint(&Method::POST, "/images/postgres:16/json"));
+}
+
+#[test]
 fn normalize_strips_version_prefix() {
     assert_eq!(normalize_versioned_path("/v1.41/_ping"), "/_ping");
     assert_eq!(

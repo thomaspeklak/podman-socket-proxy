@@ -41,6 +41,7 @@ PSP matches requests against the normalized path but forwards the original reque
 | `/containers/json` | `GET` | yes | container list; PSP filters response to `io.psp.managed=true` containers only |
 | `/containers/create` | `POST` | yes | create container; PSP may inject labels |
 | `/containers/{id}/start` | `POST` | yes | start container |
+| `/containers/{id}/stop` | `POST` | yes | stop container (needed for cleanup after timeout) |
 | `/containers/{id}/json` | `GET` | yes | inspect container; PSP rewrites `HostIp` fields |
 | `/images/{name}/json` | `GET` | yes | image inspect; name may contain slashes (e.g. `org/image:tag`) |
 | `/containers/{id}/logs` | `GET` | yes | container logs |
@@ -83,7 +84,7 @@ These are common future candidates, but are not part of the current v1 contract:
 |---|---|---|---|
 | `/networks/create` | `POST` | unsupported | network policy and ownership model not implemented |
 | `/networks/{id}` | `DELETE` | unsupported | deferred until network lifecycle support exists |
-| `/containers/{id}/stop` | `POST` | unsupported | not required for MVP lifecycle |
+| `/containers/{id}/stop` | `POST` | supported | moved to supported endpoints above |
 | `/events` | `GET` | unsupported | streaming support not required for MVP |
 | `/images/{name}/json` | `GET` | supported | moved to supported endpoints above |
 | broad Docker surface | many | unsupported | PSP uses an explicit allowlist |

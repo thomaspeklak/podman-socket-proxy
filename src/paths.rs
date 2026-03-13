@@ -35,6 +35,7 @@ pub fn is_supported_endpoint(method: &Method, normalized: &str) -> bool {
                 ("GET", 3) => normalized.ends_with("/json") || normalized.ends_with("/logs"),
                 ("POST", 3) => {
                     normalized.ends_with("/start")
+                        || normalized.ends_with("/stop")
                         || normalized.ends_with("/wait")
                         || normalized.ends_with("/exec")
                 }

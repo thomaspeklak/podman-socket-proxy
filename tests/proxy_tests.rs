@@ -397,6 +397,8 @@ fn accepts_exec_paths() {
     assert!(is_supported_endpoint(&Method::GET, "/exec/eid-abc/json"));
     // stop
     assert!(is_supported_endpoint(&Method::POST, "/containers/cid-abc/stop"));
+    // archive (copy files into container)
+    assert!(is_supported_endpoint(&Method::PUT, "/containers/cid-abc/archive"));
     // wrong methods
     assert!(!is_supported_endpoint(&Method::GET, "/containers/cid-abc/exec"));
     assert!(!is_supported_endpoint(&Method::DELETE, "/exec/eid-abc/start"));

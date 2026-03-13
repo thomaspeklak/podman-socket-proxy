@@ -39,6 +39,7 @@ pub fn is_supported_endpoint(method: &Method, normalized: &str) -> bool {
                         || normalized.ends_with("/wait")
                         || normalized.ends_with("/exec")
                 }
+                ("PUT", 3) => normalized.ends_with("/archive"),
 
                 ("DELETE", 2) => normalized != "/containers/json",
                 _ => false,

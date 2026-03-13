@@ -6,7 +6,7 @@ use axum::{
     http::{Method, Response, StatusCode},
 };
 use http_body_util::{BodyExt, Limited};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     AppState,
@@ -143,6 +143,14 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         }
     }
 
+    if !body.is_empty() {
+        debug!(
+            request_id = %request_id,
+            body = %String::from_utf8_lossy(&body),
+            "psp request body"
+        );
+    }
+
     if let Err(denial) = state.policy.evaluate_request(
         &parts.method,
         &normalized,
@@ -211,6 +219,15 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         status = upstream.status.as_u16(),
         "psp forwarded request"
     );
+
+    if !upstream.body.is_empty() {
+        debug!(
+            request_id = %request_id,
+            status = upstream.status.as_u16(),
+            body = %String::from_utf8_lossy(&upstream.body),
+            "psp response body"
+        );
+    }
 
     let body = rewrite_response_body(
         &method,

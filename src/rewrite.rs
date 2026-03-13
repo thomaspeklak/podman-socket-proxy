@@ -49,7 +49,12 @@ pub fn rewrite_response_body(
     serde_json::to_vec(&json).map(Bytes::from).unwrap_or(body)
 }
 
-/// Keep only containers that carry the `io.psp.managed=true` label.
+/// Keep only containers that are either PSP-managed or created by Testcontainers.
+///
+/// PSP-managed containers carry `io.psp.managed=true`. Testcontainers containers
+/// carry `org.testcontainers=true`. Both need to be visible so the reuse flow
+/// (e.g. REBUILD_SNAPSHOT=false) can find containers created in previous sessions
+/// that were not themselves started through this PSP instance.
 fn filter_managed_containers(body: Bytes) -> Bytes {
     let Ok(serde_json::Value::Array(containers)) = serde_json::from_slice::<serde_json::Value>(&body)
     else {
@@ -59,10 +64,16 @@ fn filter_managed_containers(body: Bytes) -> Bytes {
     let filtered: Vec<serde_json::Value> = containers
         .into_iter()
         .filter(|c| {
-            c.get("Labels")
+            let labels = c.get("Labels");
+            let psp_managed = labels
                 .and_then(|l| l.get(LABEL_MANAGED))
                 .and_then(|v| v.as_str())
-                == Some("true")
+                == Some("true");
+            let testcontainers = labels
+                .and_then(|l| l.get("org.testcontainers"))
+                .and_then(|v| v.as_str())
+                == Some("true");
+            psp_managed || testcontainers
         })
         .collect();
 

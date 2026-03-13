@@ -418,8 +418,9 @@ fn accepts_container_list_path() {
 async fn container_list_filters_to_psp_managed_only() {
     let backend = spawn_mock_backend(helpers::ContainerListMock {
         list_body: json!([
-            {"Id": "cid-managed", "Labels": {"io.psp.managed": "true", "io.psp.session": "sess-1"}},
-            {"Id": "cid-foreign", "Labels": {"some.other.label": "true"}},
+            {"Id": "cid-managed",        "Labels": {"io.psp.managed": "true"}},
+            {"Id": "cid-testcontainers", "Labels": {"org.testcontainers": "true", "org.testcontainers.container-hash": "abc123"}},
+            {"Id": "cid-foreign",        "Labels": {"some.other.label": "true"}},
             {"Id": "cid-no-labels"}
         ]),
     })
@@ -440,8 +441,10 @@ async fn container_list_filters_to_psp_managed_only() {
     .await;
     assert_eq!(response.0, StatusCode::OK);
     let list = response.1.as_array().unwrap().clone();
-    assert_eq!(list.len(), 1, "only PSP-managed container should be returned");
-    assert_eq!(list[0]["Id"], "cid-managed");
+    assert_eq!(list.len(), 2, "PSP-managed and Testcontainers containers should be returned");
+    let ids: Vec<&str> = list.iter().map(|c| c["Id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"cid-managed"));
+    assert!(ids.contains(&"cid-testcontainers"));
 
     let _ = psp_shutdown.send(());
     let _ = backend.shutdown.send(());

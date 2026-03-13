@@ -63,6 +63,11 @@ impl AppState {
     }
 
     pub async fn startup_sweep(&self) -> Result<(), ProxyError> {
+        if self.sessions.keep_on_failure() {
+            info!("startup sweep skipped: keep_on_failure=true, leaving existing psp-managed containers");
+            return Ok(());
+        }
+
         let filter = serde_json::json!({"label": [format!("{}=true", LABEL_MANAGED)]});
         let filter_encoded = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("all", "1")

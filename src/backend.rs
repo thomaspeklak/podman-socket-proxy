@@ -75,7 +75,11 @@ impl BackendClient {
                 for (name, value) in &filtered_headers {
                     upstream = upstream.header(name, value);
                 }
-                let response = upstream.body(body).send().await.map_err(ProxyError::backend)?;
+                let response = upstream
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(ProxyError::backend)?;
 
                 if let Some(cl) = response.content_length()
                     && cl > MAX_RESPONSE_BODY_BYTES as u64
@@ -204,10 +208,12 @@ impl BackendClient {
 
     pub async fn list_containers(&self, all: bool) -> Result<Vec<DiscoveredContainer>, ProxyError> {
         let all_flag = if all { 1 } else { 0 };
-        let json = self.get_json(&format!("/containers/json?all={all_flag}")).await?;
-        let containers = json
-            .as_array()
-            .ok_or_else(|| ProxyError::internal(anyhow!("backend /containers/json did not return an array")))?;
+        let json = self
+            .get_json(&format!("/containers/json?all={all_flag}"))
+            .await?;
+        let containers = json.as_array().ok_or_else(|| {
+            ProxyError::internal(anyhow!("backend /containers/json did not return an array"))
+        })?;
 
         containers
             .iter()
@@ -244,7 +250,9 @@ pub(crate) fn hop_by_hop_header(name: &HeaderName) -> bool {
     )
 }
 
-fn discovered_container_from_summary(value: &serde_json::Value) -> Result<DiscoveredContainer, ProxyError> {
+fn discovered_container_from_summary(
+    value: &serde_json::Value,
+) -> Result<DiscoveredContainer, ProxyError> {
     let id = value
         .get("Id")
         .and_then(|v| v.as_str())
@@ -263,7 +271,10 @@ fn discovered_container_from_summary(value: &serde_json::Value) -> Result<Discov
         })
         .unwrap_or_default();
 
-    let image = value.get("Image").and_then(|v| v.as_str()).map(str::to_string);
+    let image = value
+        .get("Image")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let managed = value
         .get("Labels")
         .and_then(|v| v.get(LABEL_MANAGED))
@@ -278,12 +289,20 @@ fn discovered_container_from_summary(value: &serde_json::Value) -> Result<Discov
             image,
             managed,
         },
-        state: value.get("State").and_then(|v| v.as_str()).map(str::to_string),
-        status: value.get("Status").and_then(|v| v.as_str()).map(str::to_string),
+        state: value
+            .get("State")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        status: value
+            .get("Status")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     })
 }
 
-fn container_metadata_from_inspect(value: &serde_json::Value) -> Result<ContainerMetadata, ProxyError> {
+fn container_metadata_from_inspect(
+    value: &serde_json::Value,
+) -> Result<ContainerMetadata, ProxyError> {
     let id = value
         .get("Id")
         .and_then(|v| v.as_str())

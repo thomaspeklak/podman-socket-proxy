@@ -64,7 +64,9 @@ impl AppState {
 
     pub async fn startup_sweep(&self) -> Result<(), ProxyError> {
         if self.sessions.keep_on_failure() {
-            info!("startup sweep skipped: keep_on_failure=true, leaving existing psp-managed containers");
+            info!(
+                "startup sweep skipped: keep_on_failure=true, leaving existing psp-managed containers"
+            );
             return Ok(());
         }
 
@@ -84,17 +86,23 @@ impl AppState {
 
         let count = containers.len();
         if count > 0 {
-            info!(count, "startup sweep: removing orphaned psp-managed containers");
+            info!(
+                count,
+                "startup sweep: removing orphaned psp-managed containers"
+            );
         }
         for container in containers {
             if let Some(id) = container.get("Id").and_then(|value| value.as_str()) {
-                let name = container.get("Names")
+                let name = container
+                    .get("Names")
                     .and_then(|n| n.as_array())
                     .and_then(|arr| arr.first())
                     .and_then(|n| n.as_str())
                     .unwrap_or(id);
                 info!(container_id = %id, container_name = %name, "startup sweep: removing container");
-                self.backend.delete(&format!("/containers/{id}?force=1")).await?;
+                self.backend
+                    .delete(&format!("/containers/{id}?force=1"))
+                    .await?;
             }
         }
 
@@ -105,17 +113,25 @@ impl AppState {
         let ids = self.sessions.tracked_container_ids();
         if self.sessions.keep_on_failure() {
             if !ids.is_empty() {
-                info!(count = ids.len(), "shutdown cleanup skipped: keep_on_failure=true, leaving containers");
+                info!(
+                    count = ids.len(),
+                    "shutdown cleanup skipped: keep_on_failure=true, leaving containers"
+                );
             }
             return Ok(());
         }
 
         if !ids.is_empty() {
-            info!(count = ids.len(), "shutdown cleanup: removing psp-managed containers");
+            info!(
+                count = ids.len(),
+                "shutdown cleanup: removing psp-managed containers"
+            );
         }
         for id in ids {
             info!(container_id = %id, "shutdown cleanup: removing container");
-            self.backend.delete(&format!("/containers/{id}?force=1")).await?;
+            self.backend
+                .delete(&format!("/containers/{id}?force=1"))
+                .await?;
         }
 
         Ok(())
@@ -194,7 +210,11 @@ pub async fn serve_with_shutdown(config: Config) -> Result<()> {
     // Human-friendly startup banner to stderr
     let socket_url = format!("unix://{}", config.listen_socket.display());
     eprintln!();
-    eprintln!("  psp {} ({}) ready", env!("CARGO_PKG_VERSION"), COMPATIBILITY_PROFILE);
+    eprintln!(
+        "  psp {} ({}) ready",
+        env!("CARGO_PKG_VERSION"),
+        COMPATIBILITY_PROFILE
+    );
     eprintln!("  socket  : {socket_url}");
     eprintln!("  backend : {}", config.backend.display_string());
     eprintln!("  policy  : {}", config.policy_path.display());
@@ -238,7 +258,10 @@ async fn remove_existing_socket(path: &Path) -> Result<()> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(anyhow!("failed to remove stale socket {}: {e}", path.display())),
+        Err(e) => Err(anyhow!(
+            "failed to remove stale socket {}: {e}",
+            path.display()
+        )),
     }
 }
 

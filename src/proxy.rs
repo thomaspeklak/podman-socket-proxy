@@ -13,7 +13,10 @@ use crate::{
     audit::RequestAuditContext,
     backend::hop_by_hop_header,
     error::{ProxyError, with_context_headers},
-    paths::{container_id_from_path, container_ref_from_path, is_supported_endpoint, normalize_versioned_path},
+    paths::{
+        container_id_from_path, container_ref_from_path, is_supported_endpoint,
+        normalize_versioned_path,
+    },
     rewrite::rewrite_response_body,
     session::inject_session_labels_value,
 };
@@ -79,14 +82,18 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         && let Ok(len) = cl.to_str().unwrap_or("0").parse::<usize>()
         && len > MAX_REQUEST_BODY_BYTES
     {
-        return ProxyError::payload_too_large().into_response(&request_id, Some(&session.effective));
+        return ProxyError::payload_too_large()
+            .into_response(&request_id, Some(&session.effective));
     }
 
     let limited = Limited::new(body, MAX_REQUEST_BODY_BYTES);
     let body = match limited.collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(error) => {
-            let proxy_error = if error.downcast_ref::<http_body_util::LengthLimitError>().is_some() {
+            let proxy_error = if error
+                .downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some()
+            {
                 ProxyError::payload_too_large()
             } else {
                 ProxyError::internal(anyhow::anyhow!("{error}"))
@@ -95,14 +102,12 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         }
     };
 
-    let parsed_body: Option<serde_json::Value> = if parts.method == Method::POST
-        && normalized == "/containers/create"
-        && !body.is_empty()
-    {
-        serde_json::from_slice(&body).ok()
-    } else {
-        None
-    };
+    let parsed_body: Option<serde_json::Value> =
+        if parts.method == Method::POST && normalized == "/containers/create" && !body.is_empty() {
+            serde_json::from_slice(&body).ok()
+        } else {
+            None
+        };
     let audit = RequestAuditContext::from_request(
         &parts.method,
         &normalized,
@@ -116,7 +121,11 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         && normalized != "/containers/create"
         && !state.sessions.is_tracked(container_ref)
     {
-        match state.backend.inspect_container_metadata(container_ref).await {
+        match state
+            .backend
+            .inspect_container_metadata(container_ref)
+            .await
+        {
             Ok(Some(container)) => {
                 if let Err(denial) = state.policy.evaluate_container_access(&container) {
                     warn!(
@@ -151,12 +160,11 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         );
     }
 
-    if let Err(denial) = state.policy.evaluate_request(
-        &parts.method,
-        &normalized,
-        parts.uri.query(),
-        body.as_ref(),
-    ) {
+    if let Err(denial) =
+        state
+            .policy
+            .evaluate_request(&parts.method, &normalized, parts.uri.query(), body.as_ref())
+    {
         warn!(
             decision = "deny",
             kind = "policy_denied",
@@ -170,14 +178,16 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
             reason = %denial.reason,
             "psp denied request"
         );
-        return ProxyError::policy_denied(denial).into_response(&request_id, Some(&session.effective));
+        return ProxyError::policy_denied(denial)
+            .into_response(&request_id, Some(&session.effective));
     }
 
     let body = if let Some(parsed) = parsed_body {
         match inject_session_labels_value(parsed, &session.effective) {
             Ok(body) => body,
             Err(error) => {
-                return ProxyError::internal(error).into_response(&request_id, Some(&session.effective));
+                return ProxyError::internal(error)
+                    .into_response(&request_id, Some(&session.effective));
             }
         }
     } else {
@@ -194,7 +204,9 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
         Err(error) => return error.into_response(&request_id, Some(&session.effective)),
     };
 
-    if method == Method::POST && normalized == "/containers/create" && upstream.status == StatusCode::CREATED
+    if method == Method::POST
+        && normalized == "/containers/create"
+        && upstream.status == StatusCode::CREATED
         && let Some(id) = extract_container_id(&upstream.body)
     {
         state.sessions.track_container(&session.effective, &id);
@@ -248,14 +260,20 @@ pub async fn proxy_request(State(state): State<Arc<AppState>>, request: Request)
 
     match response.body(Body::from(body)) {
         Ok(response) => with_context_headers(response, &request_id, Some(&session.effective)),
-        Err(error) => ProxyError::internal(error).into_response(&request_id, Some(&session.effective)),
+        Err(error) => {
+            ProxyError::internal(error).into_response(&request_id, Some(&session.effective))
+        }
     }
 }
 
 fn extract_container_id(body: &axum::body::Bytes) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
-        .and_then(|json| json.get("Id").and_then(|value| value.as_str()).map(str::to_string))
+        .and_then(|json| {
+            json.get("Id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
 }
 
 fn is_mutating(method: &Method) -> bool {

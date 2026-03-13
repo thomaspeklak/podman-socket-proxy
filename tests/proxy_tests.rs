@@ -7,10 +7,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::Request as HyperRequest;
 use podman_socket_proxy::{
-    AppState, BackendConfig,
-    error,
-    is_supported_endpoint, normalize_versioned_path,
-    policy,
+    AppState, BackendConfig, error, is_supported_endpoint, normalize_versioned_path, policy,
     session,
 };
 use serde_json::{Value, json};
@@ -135,8 +132,7 @@ async fn rewrites_container_inspect_host_ports() {
             }
         }
     });
-    let backend =
-        spawn_mock_backend(LifecycleMock::with_inspect_body(calls, inspect_body)).await;
+    let backend = spawn_mock_backend(LifecycleMock::with_inspect_body(calls, inspect_body)).await;
     let temp = TempDir::new().unwrap();
     let socket = temp.path().join("psp.sock");
     let (psp_shutdown, psp_handle) = spawn_psp(socket.clone(), backend.url).await;
@@ -218,8 +214,16 @@ async fn startup_sweep_removes_stale_managed_containers() {
     state.startup_sweep().await.unwrap();
 
     let snapshot = calls.snapshot();
-    assert!(snapshot.iter().any(|(m, p)| m == "GET" && p.starts_with("/containers/json?")));
-    assert!(snapshot.iter().any(|(m, p)| m == "DELETE" && p == "/containers/stale-1?force=1"));
+    assert!(
+        snapshot
+            .iter()
+            .any(|(m, p)| m == "GET" && p.starts_with("/containers/json?"))
+    );
+    assert!(
+        snapshot
+            .iter()
+            .any(|(m, p)| m == "DELETE" && p == "/containers/stale-1?force=1")
+    );
 
     let _ = backend.shutdown.send(());
     let _ = backend.handle.await;
@@ -240,10 +244,12 @@ async fn cleanup_tracked_resources_deletes_containers_on_shutdown() {
     state.sessions.track_container("sess-1", "cid-123");
     state.cleanup_tracked_resources().await.unwrap();
 
-    assert!(calls
-        .snapshot()
-        .iter()
-        .any(|(m, p)| m == "DELETE" && p == "/containers/cid-123?force=1"));
+    assert!(
+        calls
+            .snapshot()
+            .iter()
+            .any(|(m, p)| m == "DELETE" && p == "/containers/cid-123?force=1")
+    );
 
     let _ = backend.shutdown.send(());
     let _ = backend.handle.await;
@@ -273,7 +279,10 @@ fn accepts_versioned_and_unversioned_supported_paths() {
     let n = |p| normalize_versioned_path(p);
     assert!(is_supported_endpoint(&Method::GET, &n("/_ping")));
     assert!(is_supported_endpoint(&Method::GET, &n("/v1.41/_ping")));
-    assert!(is_supported_endpoint(&Method::POST, &n("/containers/create")));
+    assert!(is_supported_endpoint(
+        &Method::POST,
+        &n("/containers/create")
+    ));
     assert!(is_supported_endpoint(
         &Method::POST,
         &n("/v1.41/containers/create")
@@ -365,7 +374,10 @@ fn rejects_deep_nested_container_paths() {
 #[test]
 fn accepts_image_inspect_paths() {
     // simple image name
-    assert!(is_supported_endpoint(&Method::GET, "/images/postgres:16/json"));
+    assert!(is_supported_endpoint(
+        &Method::GET,
+        "/images/postgres:16/json"
+    ));
     // namespaced image (org/name:tag) — name has a slash, so path has 4 segments
     assert!(is_supported_endpoint(
         &Method::GET,
@@ -379,14 +391,23 @@ fn accepts_image_inspect_paths() {
     // /images/json (list) must NOT match
     assert!(!is_supported_endpoint(&Method::GET, "/images/json"));
     // wrong method
-    assert!(!is_supported_endpoint(&Method::DELETE, "/images/postgres:16/json"));
-    assert!(!is_supported_endpoint(&Method::POST, "/images/postgres:16/json"));
+    assert!(!is_supported_endpoint(
+        &Method::DELETE,
+        "/images/postgres:16/json"
+    ));
+    assert!(!is_supported_endpoint(
+        &Method::POST,
+        "/images/postgres:16/json"
+    ));
 }
 
 #[test]
 fn accepts_exec_paths() {
     // create exec on a container
-    assert!(is_supported_endpoint(&Method::POST, "/containers/cid-abc/exec"));
+    assert!(is_supported_endpoint(
+        &Method::POST,
+        "/containers/cid-abc/exec"
+    ));
     assert!(is_supported_endpoint(
         &Method::POST,
         &normalize_versioned_path("/v1.41/containers/cid-abc/exec")
@@ -396,12 +417,24 @@ fn accepts_exec_paths() {
     // inspect exec result
     assert!(is_supported_endpoint(&Method::GET, "/exec/eid-abc/json"));
     // stop
-    assert!(is_supported_endpoint(&Method::POST, "/containers/cid-abc/stop"));
+    assert!(is_supported_endpoint(
+        &Method::POST,
+        "/containers/cid-abc/stop"
+    ));
     // archive (copy files into container)
-    assert!(is_supported_endpoint(&Method::PUT, "/containers/cid-abc/archive"));
+    assert!(is_supported_endpoint(
+        &Method::PUT,
+        "/containers/cid-abc/archive"
+    ));
     // wrong methods
-    assert!(!is_supported_endpoint(&Method::GET, "/containers/cid-abc/exec"));
-    assert!(!is_supported_endpoint(&Method::DELETE, "/exec/eid-abc/start"));
+    assert!(!is_supported_endpoint(
+        &Method::GET,
+        "/containers/cid-abc/exec"
+    ));
+    assert!(!is_supported_endpoint(
+        &Method::DELETE,
+        "/exec/eid-abc/start"
+    ));
 }
 
 #[test]
@@ -443,7 +476,11 @@ async fn container_list_filters_to_psp_managed_only() {
     .await;
     assert_eq!(response.0, StatusCode::OK);
     let list = response.1.as_array().unwrap().clone();
-    assert_eq!(list.len(), 2, "PSP-managed and Testcontainers containers should be returned");
+    assert_eq!(
+        list.len(),
+        2,
+        "PSP-managed and Testcontainers containers should be returned"
+    );
     let ids: Vec<&str> = list.iter().map(|c| c["Id"].as_str().unwrap()).collect();
     assert!(ids.contains(&"cid-managed"));
     assert!(ids.contains(&"cid-testcontainers"));
@@ -642,7 +679,8 @@ async fn enforces_required_session_id_for_mutating_requests() {
     let backend = spawn_mock_backend(LifecycleMock::new(calls.clone())).await;
     let temp = TempDir::new().unwrap();
     let socket = temp.path().join("psp.sock");
-    let (psp_shutdown, psp_handle) = spawn_psp_with_opts(socket.clone(), backend.url, false, true).await;
+    let (psp_shutdown, psp_handle) =
+        spawn_psp_with_opts(socket.clone(), backend.url, false, true).await;
     let client = new_test_client();
 
     let response = request_json(

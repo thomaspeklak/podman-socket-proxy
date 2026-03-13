@@ -73,9 +73,7 @@ impl ProxyError {
                     method: Some(method.to_string()),
                     path: Some(path),
                     rule_id: None,
-                    hint: Some(
-                        "Use only the documented Testcontainers-compatible PSP API subset.",
-                    ),
+                    hint: Some("Use only the documented Testcontainers-compatible PSP API subset."),
                     docs: Some("docs/compatibility/testcontainers-profile.md"),
                     request_id: request_id.to_string(),
                     session_id: session_id.map(str::to_string),
@@ -120,7 +118,9 @@ impl ProxyError {
                     method: None,
                     path: None,
                     rule_id: None,
-                    hint: Some("Verify Podman is reachable and the configured backend endpoint is correct."),
+                    hint: Some(
+                        "Verify Podman is reachable and the configured backend endpoint is correct.",
+                    ),
                     docs: Some("docs/operations/runbook.md"),
                     request_id: request_id.to_string(),
                     session_id: session_id.map(str::to_string),
@@ -134,7 +134,9 @@ impl ProxyError {
                     method: None,
                     path: None,
                     rule_id: None,
-                    hint: Some("Check backend health and whether the requested container operation is hanging."),
+                    hint: Some(
+                        "Check backend health and whether the requested container operation is hanging.",
+                    ),
                     docs: Some("docs/operations/runbook.md"),
                     request_id: request_id.to_string(),
                     session_id: session_id.map(str::to_string),
@@ -197,7 +199,10 @@ pub fn json_response(status: StatusCode, body: &impl Serialize) -> Response<Body
     match serde_json::to_vec(body) {
         Ok(json) => Response::builder()
             .status(status)
-            .header(http::header::CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .header(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )
             .body(Body::from(json))
             .unwrap_or_else(|_| plain_500()),
         Err(_) => plain_500(),
@@ -210,9 +215,7 @@ pub fn with_context_headers(
     session_id: Option<&str>,
 ) -> Response<Body> {
     if let Ok(value) = HeaderValue::from_str(request_id) {
-        response
-            .headers_mut()
-            .insert(REQUEST_ID_HEADER, value);
+        response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
     if let Some(session_id) = session_id
         && let Ok(value) = HeaderValue::from_str(session_id)
@@ -231,7 +234,9 @@ fn denial_metadata(rule_id: &str) -> (Option<&'static str>, Option<&'static str>
             Some("docs/examples/http-api-examples.md"),
         ),
         RULE_PRIVILEGED => (
-            Some("Remove HostConfig.Privileged or change policy intentionally if this is expected."),
+            Some(
+                "Remove HostConfig.Privileged or change policy intentionally if this is expected.",
+            ),
             Some("docs/policy-reference.md"),
         ),
         RULE_HOST_NAMESPACE => (
@@ -259,7 +264,9 @@ fn denial_metadata(rule_id: &str) -> (Option<&'static str>, Option<&'static str>
             Some("docs/policy-reference.md"),
         ),
         RULE_CONTAINER_DENYLIST => (
-            Some("Remove the explicit container deny entry only if access is intentionally approved."),
+            Some(
+                "Remove the explicit container deny entry only if access is intentionally approved.",
+            ),
             Some("docs/policy-reference.md"),
         ),
         RULE_CONTAINER_ALLOWLIST => (
@@ -273,7 +280,10 @@ fn denial_metadata(rule_id: &str) -> (Option<&'static str>, Option<&'static str>
 fn plain_500() -> Response<Body> {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .header(http::header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))
+        .header(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain"),
+        )
         .body(Body::from("internal proxy error"))
         .unwrap()
 }

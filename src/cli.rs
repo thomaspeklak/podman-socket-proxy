@@ -6,57 +6,75 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use comfy_table::{Attribute, Cell, CellAlignment, Color, ColumnConstraint, ContentArrangement, Table, Width, presets};
-use indicatif::{ProgressBar, ProgressStyle};
 use axum::http::{Method, StatusCode};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::generate;
+use comfy_table::{
+    Attribute, Cell, CellAlignment, Color, ColumnConstraint, ContentArrangement, Table, Width,
+    presets,
+};
 use dialoguer::{Input, MultiSelect, Select};
 use http_body_util::{BodyExt, Full};
 use hyper::Request as HyperRequest;
 use hyper_util::{client::legacy::Client as TestClient, rt::TokioExecutor};
 use hyperlocal::UnixConnector;
+use indicatif::{ProgressBar, ProgressStyle};
 use podman_socket_proxy::{
     AppState, COMPATIBILITY_PROFILE, Config, Policy, ResolvedConfig, normalize_versioned_path,
-    router, run_startup_checks, serve_with_shutdown,
-    session::SESSION_HEADER,
+    router, run_startup_checks, serve_with_shutdown, session::SESSION_HEADER,
 };
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::{
-    net::UnixListener,
-    sync::oneshot,
-    task::JoinHandle,
-};
+use tokio::{net::UnixListener, sync::oneshot, task::JoinHandle};
 
 // ── Color helpers ────────────────────────────────────────────────────────────
 
 fn col_ok(s: &str) -> String {
-    if io::stdout().is_terminal() { format!("\x1b[32m{s}\x1b[0m") } else { s.to_string() }
+    if io::stdout().is_terminal() {
+        format!("\x1b[32m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 fn col_err(s: &str) -> String {
-    if io::stdout().is_terminal() { format!("\x1b[31m{s}\x1b[0m") } else { s.to_string() }
+    if io::stdout().is_terminal() {
+        format!("\x1b[31m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 fn col_warn(s: &str) -> String {
-    if io::stdout().is_terminal() { format!("\x1b[33m{s}\x1b[0m") } else { s.to_string() }
+    if io::stdout().is_terminal() {
+        format!("\x1b[33m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 fn col_bold(s: &str) -> String {
-    if io::stdout().is_terminal() { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
+    if io::stdout().is_terminal() {
+        format!("\x1b[1m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 fn col_dim(s: &str) -> String {
-    if io::stdout().is_terminal() { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
+    if io::stdout().is_terminal() {
+        format!("\x1b[2m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 
 // ── TUI helpers ──────────────────────────────────────────────────────────────
 
 /// Detect terminal width, respecting the COLUMNS env var override for tests/CI.
 fn term_width() -> u16 {
-    if let Ok(s) = std::env::var("COLUMNS") {
-        if let Ok(w) = s.parse::<u16>() {
-            return w;
-        }
+    if let Ok(s) = std::env::var("COLUMNS")
+        && let Ok(w) = s.parse::<u16>()
+    {
+        return w;
     }
     120
 }
@@ -87,7 +105,9 @@ fn make_table(headers: &[&str]) -> Option<Table> {
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_width(term_width());
     table.set_header(
-        headers.iter().map(|h| Cell::new(h).add_attribute(Attribute::Bold))
+        headers
+            .iter()
+            .map(|h| Cell::new(h).add_attribute(Attribute::Bold)),
     );
     Some(table)
 }
@@ -123,10 +143,10 @@ fn star_rating(count: u64) -> String {
 
 fn access_display(access: &str) -> (&'static str, Color) {
     match access {
-        "allowed"      => ("● ALLOWED", Color::Green),
-        "denied"       => ("✕ DENIED",  Color::Red),
+        "allowed" => ("● ALLOWED", Color::Green),
+        "denied" => ("✕ DENIED", Color::Red),
         "default-deny" => ("○ DEFAULT", Color::Yellow),
-        _              => ("◆ MANAGED", Color::Blue),
+        _ => ("◆ MANAGED", Color::Blue),
     }
 }
 
@@ -271,7 +291,10 @@ struct ContainerAccessArgs {
     project: bool,
     #[arg(long)]
     policy: Option<PathBuf>,
-    #[arg(long, help = "Show what would change without modifying the policy file")]
+    #[arg(
+        long,
+        help = "Show what would change without modifying the policy file"
+    )]
     dry_run: bool,
 }
 
@@ -325,7 +348,10 @@ struct CompletionsArgs {
 
 #[derive(Args, Debug)]
 struct InitArgs {
-    #[arg(long, help = "Create .psp.json and policy in the current project instead of global config")]
+    #[arg(
+        long,
+        help = "Create .psp.json and policy in the current project instead of global config"
+    )]
     project: bool,
     #[arg(long, value_enum)]
     profile: Option<InitProfile>,
@@ -376,10 +402,24 @@ pub async fn run() -> Result<()> {
             None => discover_browser().await,
             Some(DiscoverCommand::Containers(args)) => discover_containers(args).await,
             Some(DiscoverCommand::Allow(args)) => {
-                mutate_container_access(args.container, args.project, args.policy, true, args.dry_run).await
+                mutate_container_access(
+                    args.container,
+                    args.project,
+                    args.policy,
+                    true,
+                    args.dry_run,
+                )
+                .await
             }
             Some(DiscoverCommand::Deny(args)) => {
-                mutate_container_access(args.container, args.project, args.policy, false, args.dry_run).await
+                mutate_container_access(
+                    args.container,
+                    args.project,
+                    args.policy,
+                    false,
+                    args.dry_run,
+                )
+                .await
             }
         },
         Some(Command::Images { command }) => match command {
@@ -388,7 +428,11 @@ pub async fn run() -> Result<()> {
         },
         Some(Command::SmokeTest(args)) => smoke_test(args).await,
         Some(Command::Version) => {
-            println!("psp {} ({})", env!("CARGO_PKG_VERSION"), COMPATIBILITY_PROFILE);
+            println!(
+                "psp {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                COMPATIBILITY_PROFILE
+            );
             Ok(())
         }
         Some(Command::Status) => status().await,
@@ -405,7 +449,12 @@ pub async fn run() -> Result<()> {
 fn section(label: &str) {
     if io::stdout().is_terminal() {
         let bar_len = 40usize.saturating_sub(label.len() + 4);
-        println!("\n  {} {} {}", col_bold("──"), col_bold(label), col_dim(&"─".repeat(bar_len)));
+        println!(
+            "\n  {} {} {}",
+            col_bold("──"),
+            col_bold(label),
+            col_dim(&"─".repeat(bar_len))
+        );
     } else {
         println!("\n[{}]", label);
     }
@@ -458,19 +507,55 @@ async fn doctor() -> Result<()> {
     println!("{}", col_bold(&format!("{} PSP doctor OK", col_ok("✓"))));
 
     section("Backend");
-    println!("  {} backend:      {}", col_ok("✓"), config.backend.display_string());
-    println!("  {} listen socket:{}", col_ok("✓"), format!("  {}", config.listen_socket.display()));
-    println!("  {} policy:       {}", col_ok("✓"), config.policy_path.display());
+    println!(
+        "  {} backend:      {}",
+        col_ok("✓"),
+        config.backend.display_string()
+    );
+    println!(
+        "  {} listen socket:  {}",
+        col_ok("✓"),
+        config.listen_socket.display()
+    );
+    println!(
+        "  {} policy:       {}",
+        col_ok("✓"),
+        config.policy_path.display()
+    );
 
     section("Config");
-    println!("  {} advertised host:    {}", col_ok("·"), config.advertised_host);
-    println!("  {} keep on failure:    {}", col_ok("·"), config.keep_on_failure);
-    println!("  {} require session id: {}", col_ok("·"), config.require_session_id);
-    println!("  {} compatibility:      {}", col_ok("·"), COMPATIBILITY_PROFILE);
+    println!(
+        "  {} advertised host:    {}",
+        col_ok("·"),
+        config.advertised_host
+    );
+    println!(
+        "  {} keep on failure:    {}",
+        col_ok("·"),
+        config.keep_on_failure
+    );
+    println!(
+        "  {} require session id: {}",
+        col_ok("·"),
+        config.require_session_id
+    );
+    println!(
+        "  {} compatibility:      {}",
+        col_ok("·"),
+        COMPATIBILITY_PROFILE
+    );
 
     section("Policy");
-    println!("  {} image allowlist:     {} entries", col_ok("·"), policy.images.allowlist.len());
-    println!("  {} container allowlist: {} entries", col_ok("·"), policy.containers.allowlist.len());
+    println!(
+        "  {} image allowlist:     {} entries",
+        col_ok("·"),
+        policy.images.allowlist.len()
+    );
+    println!(
+        "  {} container allowlist: {} entries",
+        col_ok("·"),
+        policy.containers.allowlist.len()
+    );
 
     section("Config Sources");
     match &resolved.sources.global_config_path {
@@ -482,7 +567,11 @@ async fn doctor() -> Result<()> {
             }
         }
         None => {
-            println!("  global:  {} {}", col_dim("(no XDG_CONFIG_HOME or HOME set)"), col_dim("[skipped]"));
+            println!(
+                "  global:  {} {}",
+                col_dim("(no XDG_CONFIG_HOME or HOME set)"),
+                col_dim("[skipped]")
+            );
         }
     }
     match &resolved.sources.project_config_path {
@@ -549,7 +638,10 @@ fn check_policy(args: CheckPolicyArgs) -> Result<()> {
     {
         println!("  - {} -> {}", raw, normalized);
     }
-    println!("- container allowlist: {}", policy.containers.allowlist.len());
+    println!(
+        "- container allowlist: {}",
+        policy.containers.allowlist.len()
+    );
     for (raw, normalized) in policy
         .containers
         .allowlist
@@ -568,12 +660,24 @@ fn check_policy(args: CheckPolicyArgs) -> Result<()> {
         println!("  - {} -> {}", raw, normalized);
     }
 
-    if policy.bind_mounts.allowlist.iter().any(|entry| entry == "/") {
+    if policy
+        .bind_mounts
+        .allowlist
+        .iter()
+        .any(|entry| entry == "/")
+    {
         println!("warning: bind allowlist contains / which effectively allows all bind mounts");
     }
     for entry in &policy.images.allowlist {
-        if !entry.contains('/') || (!entry.split('/').next().unwrap_or_default().contains('.') && !entry.split('/').next().unwrap_or_default().contains(':') && entry.matches('/').count() < 2) {
-            println!("warning: image allowlist entry {} relies on short-name normalization", entry);
+        if !entry.contains('/')
+            || (!entry.split('/').next().unwrap_or_default().contains('.')
+                && !entry.split('/').next().unwrap_or_default().contains(':')
+                && entry.matches('/').count() < 2)
+        {
+            println!(
+                "warning: image allowlist entry {} relies on short-name normalization",
+                entry
+            );
         }
     }
 
@@ -584,13 +688,16 @@ fn check_policy(args: CheckPolicyArgs) -> Result<()> {
 
 async fn explain_policy(args: ExplainPolicyArgs) -> Result<()> {
     let resolved = Config::resolve_from_env()?;
-    let policy_path = args.policy.unwrap_or_else(|| resolved.config.policy_path.clone());
+    let policy_path = args
+        .policy
+        .unwrap_or_else(|| resolved.config.policy_path.clone());
     let policy = Policy::load(&policy_path)?;
 
     let method = args.method.parse::<Method>()?;
     let normalized_path = normalize_versioned_path(&args.path);
     let body = if let Some(path) = args.request_file {
-        fs::read(&path).with_context(|| format!("failed to read request file {}", path.display()))?
+        fs::read(&path)
+            .with_context(|| format!("failed to read request file {}", path.display()))?
     } else {
         Vec::new()
     };
@@ -629,16 +736,46 @@ async fn explain_policy(args: ExplainPolicyArgs) -> Result<()> {
 
 fn denial_hint_and_docs(rule_id: &str) -> (Option<&'static str>, Option<&'static str>) {
     match rule_id {
-        "PSP-POL-000" => (Some("Send a valid Docker-compatible container create JSON payload."), Some("docs/examples/http-api-examples.md")),
-        "PSP-POL-001" => (Some("Remove HostConfig.Privileged or update policy if this is intentional."), Some("docs/policy-reference.md")),
-        "PSP-POL-002" => (Some("Use isolated namespaces instead of host namespace joins."), Some("docs/policy-reference.md")),
-        "PSP-POL-003" => (Some("Allowlist only the narrow host path required for this bind mount."), Some("docs/policy-reference.md")),
-        "PSP-POL-004" => (Some("Remove device mappings unless explicitly required."), Some("docs/policy-reference.md")),
-        "PSP-POL-005" => (Some("Drop CapAdd entries or extend policy only after review."), Some("docs/policy-reference.md")),
-        "PSP-POL-006" => (Some("Choose a different image or remove the denylist entry intentionally."), Some("docs/policy-reference.md")),
-        "PSP-POL-007" => (Some("Add the image to the allowlist: psp images allow <image>"), Some("docs/policy-reference.md")),
-        "PSP-POL-008" => (Some("Remove the container deny entry if access is intentionally approved."), Some("docs/policy-reference.md")),
-        "PSP-POL-009" => (Some("Use discovery mode: psp discover allow <container>"), Some("docs/policy-reference.md")),
+        "PSP-POL-000" => (
+            Some("Send a valid Docker-compatible container create JSON payload."),
+            Some("docs/examples/http-api-examples.md"),
+        ),
+        "PSP-POL-001" => (
+            Some("Remove HostConfig.Privileged or update policy if this is intentional."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-002" => (
+            Some("Use isolated namespaces instead of host namespace joins."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-003" => (
+            Some("Allowlist only the narrow host path required for this bind mount."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-004" => (
+            Some("Remove device mappings unless explicitly required."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-005" => (
+            Some("Drop CapAdd entries or extend policy only after review."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-006" => (
+            Some("Choose a different image or remove the denylist entry intentionally."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-007" => (
+            Some("Add the image to the allowlist: psp images allow <image>"),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-008" => (
+            Some("Remove the container deny entry if access is intentionally approved."),
+            Some("docs/policy-reference.md"),
+        ),
+        "PSP-POL-009" => (
+            Some("Use discovery mode: psp discover allow <container>"),
+            Some("docs/policy-reference.md"),
+        ),
         _ => (None, Some("docs/policy-reference.md")),
     }
 }
@@ -673,7 +810,10 @@ fn resolve_profile(profile: Option<InitProfile>) -> Result<InitProfile> {
 
 fn init_policy(args: InitPolicyArgs) -> Result<()> {
     if args.output.exists() && !args.force {
-        bail!("refusing to overwrite existing file {}; pass --force to replace it", args.output.display());
+        bail!(
+            "refusing to overwrite existing file {}; pass --force to replace it",
+            args.output.display()
+        );
     }
 
     let profile = resolve_profile(args.profile)?;
@@ -707,7 +847,10 @@ fn init_policy(args: InitPolicyArgs) -> Result<()> {
     if let Some(parent) = args.output.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&args.output, format!("{}\n", serde_json::to_string_pretty(&content)?))?;
+    fs::write(
+        &args.output,
+        format!("{}\n", serde_json::to_string_pretty(&content)?),
+    )?;
     println!("Wrote policy template to {}", args.output.display());
     Ok(())
 }
@@ -723,11 +866,23 @@ fn diff_policy(args: DiffPolicyArgs) -> Result<()> {
     println!("  B: {} ({})", args.b.display(), b.version);
     println!();
 
-    print_list_diff("bind_mounts.allowlist", &a.bind_mounts.allowlist, &b.bind_mounts.allowlist);
+    print_list_diff(
+        "bind_mounts.allowlist",
+        &a.bind_mounts.allowlist,
+        &b.bind_mounts.allowlist,
+    );
     print_list_diff("images.allowlist", &a.images.allowlist, &b.images.allowlist);
     print_list_diff("images.denylist", &a.images.denylist, &b.images.denylist);
-    print_list_diff("containers.allowlist", &a.containers.allowlist, &b.containers.allowlist);
-    print_list_diff("containers.denylist", &a.containers.denylist, &b.containers.denylist);
+    print_list_diff(
+        "containers.allowlist",
+        &a.containers.allowlist,
+        &b.containers.allowlist,
+    );
+    print_list_diff(
+        "containers.denylist",
+        &a.containers.denylist,
+        &b.containers.denylist,
+    );
 
     Ok(())
 }
@@ -761,7 +916,11 @@ fn print_list_diff(label: &str, a: &[String], b: &[String]) {
 async fn discover_browser() -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         // Non-interactive: fall back to container list
-        return discover_containers(ListContainersArgs { running: false, stopped: false }).await;
+        return discover_containers(ListContainersArgs {
+            running: false,
+            stopped: false,
+        })
+        .await;
     }
 
     loop {
@@ -783,17 +942,24 @@ async fn discover_browser() -> Result<()> {
         }
 
         if let Some(mut table) = make_table(&["ID", "NAME", "IMAGE", "STATE", "ACCESS"]) {
-            table.column_mut(2).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
+            table
+                .column_mut(2)
+                .unwrap()
+                .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
             for container in &containers {
                 let access = container_access_label(&policy, &container.metadata);
                 let is_running = container.state.as_deref() == Some("running");
-                let state_str = container.state.as_deref()
+                let state_str = container
+                    .state
+                    .as_deref()
                     .unwrap_or(container.status.as_deref().unwrap_or("unknown"));
-                let (access_cell, state_cell) = access_and_state_cells(access, state_str, is_running);
+                let (access_cell, state_cell) =
+                    access_and_state_cells(access, state_str, is_running);
                 table.add_row(vec![
                     Cell::new(short_id(&container.metadata.id)).fg(Color::DarkGrey),
                     Cell::new(container.metadata.display_name()),
-                    Cell::new(container.metadata.image.as_deref().unwrap_or("")).fg(Color::DarkCyan),
+                    Cell::new(container.metadata.image.as_deref().unwrap_or(""))
+                        .fg(Color::DarkCyan),
                     state_cell,
                     access_cell,
                 ]);
@@ -839,12 +1005,19 @@ async fn discover_containers(args: ListContainersArgs) -> Result<()> {
 
     containers.sort_by(|a, b| a.metadata.display_name().cmp(&b.metadata.display_name()));
 
-    let filtered: Vec<_> = containers.iter().filter(|c| {
-        let is_running = c.state.as_deref() == Some("running");
-        if args.running && !args.stopped && !is_running { return false; }
-        if args.stopped && !args.running && is_running { return false; }
-        true
-    }).collect();
+    let filtered: Vec<_> = containers
+        .iter()
+        .filter(|c| {
+            let is_running = c.state.as_deref() == Some("running");
+            if args.running && !args.stopped && !is_running {
+                return false;
+            }
+            if args.stopped && !args.running && is_running {
+                return false;
+            }
+            true
+        })
+        .collect();
 
     if filtered.is_empty() {
         println!("No containers found.");
@@ -852,11 +1025,16 @@ async fn discover_containers(args: ListContainersArgs) -> Result<()> {
     }
 
     if let Some(mut table) = make_table(&["ID", "NAME", "IMAGE", "STATE", "ACCESS"]) {
-        table.column_mut(2).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
+        table
+            .column_mut(2)
+            .unwrap()
+            .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
         for container in &filtered {
             let access = container_access_label(&policy, &container.metadata);
             let is_running = container.state.as_deref() == Some("running");
-            let state_str = container.state.as_deref()
+            let state_str = container
+                .state
+                .as_deref()
                 .unwrap_or(container.status.as_deref().unwrap_or("unknown"));
 
             let (access_cell, state_cell) = access_and_state_cells(access, state_str, is_running);
@@ -875,7 +1053,9 @@ async fn discover_containers(args: ListContainersArgs) -> Result<()> {
         println!("ID\tNAME\tIMAGE\tSTATE\tACCESS");
         for container in &filtered {
             let access = container_access_label(&policy, &container.metadata);
-            let state_str = container.state.as_deref()
+            let state_str = container
+                .state
+                .as_deref()
                 .unwrap_or(container.status.as_deref().unwrap_or("unknown"));
             println!(
                 "{}\t{}\t{}\t{}\t{}",
@@ -926,13 +1106,30 @@ async fn mutate_container_access(
     }
 
     // Show preview box
-    let action_label = if allow { col_ok("+ ALLOW") } else { col_err("- DENY") };
+    let action_label = if allow {
+        col_ok("+ ALLOW")
+    } else {
+        col_err("- DENY")
+    };
 
     println!();
-    println!("  Changes to: {}", col_bold(&policy_path.display().to_string()));
+    println!(
+        "  Changes to: {}",
+        col_bold(&policy_path.display().to_string())
+    );
     for target in &targets {
-        println!("  {}  {} {}", action_label, target.metadata.display_name(), col_dim(&format!("({})", short_id(&target.metadata.id))));
-        println!("  {}  {} {}", col_dim("  (by id)"), col_dim(&target.metadata.id[..target.metadata.id.len().min(12)]), col_dim(""));
+        println!(
+            "  {}  {} {}",
+            action_label,
+            target.metadata.display_name(),
+            col_dim(&format!("({})", short_id(&target.metadata.id)))
+        );
+        println!(
+            "  {}  {} {}",
+            col_dim("  (by id)"),
+            col_dim(&target.metadata.id[..target.metadata.id.len().min(12)]),
+            col_dim("")
+        );
     }
     println!();
 
@@ -957,7 +1154,8 @@ async fn mutate_container_access(
     }
     policy.save(&policy_path)?;
 
-    println!("{} {} {} container(s) in {}",
+    println!(
+        "{} {} {} container(s) in {}",
         col_ok("✓"),
         if allow { "Allowed" } else { "Denied" },
         targets.len(),
@@ -1005,7 +1203,10 @@ fn select_containers_interactively<'a>(
     println!("{} container(s) available:", col_bold(&total.to_string()));
     println!();
 
-    let items: Vec<&str> = candidates.iter().map(|candidate| candidate.label.as_str()).collect();
+    let items: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect();
     let prompt = if allow {
         "Select containers to ALLOW (space to toggle, enter to confirm)"
     } else {
@@ -1057,7 +1258,9 @@ fn format_interactive_container_label(
     access: &str,
 ) -> String {
     let (badge, _) = access_display(access);
-    let state_str = container.state.as_deref()
+    let state_str = container
+        .state
+        .as_deref()
         .unwrap_or(container.status.as_deref().unwrap_or("?"));
     format!(
         "{:<12}  {:<28}  {:<22}  {}",
@@ -1068,7 +1271,10 @@ fn format_interactive_container_label(
     )
 }
 
-fn container_access_label(policy: &Policy, metadata: &podman_socket_proxy::policy::ContainerMetadata) -> &'static str {
+fn container_access_label(
+    policy: &Policy,
+    metadata: &podman_socket_proxy::policy::ContainerMetadata,
+) -> &'static str {
     if metadata.managed {
         "managed"
     } else if policy.containers.matches_deny(metadata) {
@@ -1096,8 +1302,16 @@ fn hub_result_row(result: &DockerHubSearchResult, desc_max: usize) -> [Cell; 4] 
     let stars_cell = Cell::new(star_rating(result.star_count))
         .fg(Color::Yellow)
         .set_alignment(CellAlignment::Center);
-    let desc = result.short_description.as_deref().unwrap_or("").replace('\t', " ");
-    let desc = if desc.len() > desc_max { format!("{}…", &desc[..desc_max - 3]) } else { desc };
+    let desc = result
+        .short_description
+        .as_deref()
+        .unwrap_or("")
+        .replace('\t', " ");
+    let desc = if desc.len() > desc_max {
+        format!("{}…", &desc[..desc_max - 3])
+    } else {
+        desc
+    };
     let name_cell = if result.is_official {
         Cell::new(&result.repo_name).add_attribute(Attribute::Bold)
     } else {
@@ -1113,7 +1327,10 @@ async fn search_images(args: SearchImagesArgs) -> Result<()> {
     let client = Client::builder().build()?;
     let response = client
         .get("https://hub.docker.com/v2/search/repositories/")
-        .query(&[("query", args.query.as_str()), ("page_size", &limit.to_string())])
+        .query(&[
+            ("query", args.query.as_str()),
+            ("page_size", &limit.to_string()),
+        ])
         .send()
         .await?
         .error_for_status()?;
@@ -1127,7 +1344,10 @@ async fn search_images(args: SearchImagesArgs) -> Result<()> {
     }
 
     if let Some(mut table) = make_table(&["NAME", "OFFICIAL", "STARS", "DESCRIPTION"]) {
-        table.column_mut(3).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(60)));
+        table
+            .column_mut(3)
+            .unwrap()
+            .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(60)));
         for result in &body.results {
             table.add_row(hub_result_row(result, 60));
         }
@@ -1141,7 +1361,11 @@ async fn search_images(args: SearchImagesArgs) -> Result<()> {
                 result.repo_name,
                 if result.is_official { "yes" } else { "no" },
                 result.star_count,
-                result.short_description.as_deref().unwrap_or("").replace('\t', " ")
+                result
+                    .short_description
+                    .as_deref()
+                    .unwrap_or("")
+                    .replace('\t', " ")
             );
         }
     }
@@ -1151,14 +1375,18 @@ async fn search_images(args: SearchImagesArgs) -> Result<()> {
 
 async fn allow_image(args: AllowImageArgs) -> Result<()> {
     let resolved = Config::resolve_from_env()?;
-    let policy_path = args.policy.unwrap_or_else(|| resolved.config.policy_path.clone());
+    let policy_path = args
+        .policy
+        .unwrap_or_else(|| resolved.config.policy_path.clone());
 
     let image = if let Some(img) = args.image {
         img
     } else {
         // Interactive mode: prompt for search query, fetch, picker
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            bail!("interactive mode requires a terminal; pass an image name explicitly: psp images allow <image>");
+            bail!(
+                "interactive mode requires a terminal; pass an image name explicitly: psp images allow <image>"
+            );
         }
 
         // Prompt for search
@@ -1184,7 +1412,10 @@ async fn allow_image(args: AllowImageArgs) -> Result<()> {
 
         // Show results table
         if let Some(mut table) = make_table(&["NAME", "OFFICIAL", "STARS", "DESCRIPTION"]) {
-            table.column_mut(3).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(55)));
+            table
+                .column_mut(3)
+                .unwrap()
+                .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(55)));
             for result in &body.results {
                 table.add_row(hub_result_row(result, 55));
             }
@@ -1192,11 +1423,18 @@ async fn allow_image(args: AllowImageArgs) -> Result<()> {
         }
 
         // Picker
-        let items: Vec<String> = body.results.iter().map(|r| {
-            format!("{:<40}  {}  {}", r.repo_name,
-                if r.is_official { "✓" } else { " " },
-                star_rating(r.star_count))
-        }).collect();
+        let items: Vec<String> = body
+            .results
+            .iter()
+            .map(|r| {
+                format!(
+                    "{:<40}  {}  {}",
+                    r.repo_name,
+                    if r.is_official { "✓" } else { " " },
+                    star_rating(r.star_count)
+                )
+            })
+            .collect();
 
         let selection = Select::new()
             .with_prompt("Select image to allow")
@@ -1210,7 +1448,12 @@ async fn allow_image(args: AllowImageArgs) -> Result<()> {
     let mut policy = Policy::load(&policy_path)?;
     policy.add_image_allow(&image);
     policy.save(&policy_path)?;
-    println!("{} Added {} to allowlist in {}", col_ok("✓"), col_bold(&image), policy_path.display());
+    println!(
+        "{} Added {} to allowlist in {}",
+        col_ok("✓"),
+        col_bold(&image),
+        policy_path.display()
+    );
     Ok(())
 }
 
@@ -1240,7 +1483,11 @@ async fn smoke_test(args: SmokeTestArgs) -> Result<()> {
     if ping.0 != StatusCode::OK || ping.1.trim() != "OK" {
         bail!("smoke test ping failed: {} {}", ping.0, ping.1);
     }
-    println!("{} daemon ping through PSP ({:.0}ms)", col_ok("PASS"), elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "{} daemon ping through PSP ({:.0}ms)",
+        col_ok("PASS"),
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     let t = Instant::now();
     let denied = request_json(
@@ -1259,7 +1506,11 @@ async fn smoke_test(args: SmokeTestArgs) -> Result<()> {
     if denied.0 != StatusCode::FORBIDDEN {
         bail!("expected denial path to return 403, got {}", denied.0);
     }
-    println!("{} policy denial path ({:.0}ms)", col_ok("PASS"), elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "{} policy denial path ({:.0}ms)",
+        col_ok("PASS"),
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     let image = args
         .image
@@ -1294,7 +1545,10 @@ async fn smoke_test(args: SmokeTestArgs) -> Result<()> {
     )
     .await?;
     if create.0 != StatusCode::CREATED {
-        bail!("container create smoke test failed with status {}", create.0);
+        bail!(
+            "container create smoke test failed with status {}",
+            create.0
+        );
     }
     let id = create
         .1
@@ -1311,17 +1565,29 @@ async fn smoke_test(args: SmokeTestArgs) -> Result<()> {
     )
     .await?;
     if !remove.0.is_success() {
-        bail!("container remove smoke test failed with status {}", remove.0);
+        bail!(
+            "container remove smoke test failed with status {}",
+            remove.0
+        );
     }
     let elapsed = t.elapsed();
-    println!("{} container lifecycle ({:.0}ms, image: {})", col_ok("PASS"), elapsed.as_secs_f64() * 1000.0, image);
+    println!(
+        "{} container lifecycle ({:.0}ms, image: {})",
+        col_ok("PASS"),
+        elapsed.as_secs_f64() * 1000.0,
+        image
+    );
 
     let _ = shutdown.send(());
     let _ = handle.await;
 
     let total = total_start.elapsed();
     println!();
-    println!("{} Smoke test completed in {:.1}s", col_ok("✓"), total.as_secs_f64());
+    println!(
+        "{} Smoke test completed in {:.1}s",
+        col_ok("✓"),
+        total.as_secs_f64()
+    );
     Ok(())
 }
 
@@ -1333,31 +1599,43 @@ async fn status() -> Result<()> {
     let socket_url = format!("unix://{}", socket.display());
 
     let (running, detail_lines) = if !socket.exists() {
-        (false, vec![
-            ("socket".to_string(), format!("{} (not found)", socket.display())),
-            ("start with".to_string(), "psp run".to_string()),
-        ])
+        (
+            false,
+            vec![
+                (
+                    "socket".to_string(),
+                    format!("{} (not found)", socket.display()),
+                ),
+                ("start with".to_string(), "psp run".to_string()),
+            ],
+        )
     } else {
         let client = new_test_client();
         match request_text(&client, socket, Method::GET, "/_ping", None).await {
-            Ok((status, body)) if status.is_success() && body.trim() == "OK" => {
-                (true, vec![
+            Ok((status, body)) if status.is_success() && body.trim() == "OK" => (
+                true,
+                vec![
                     ("socket".to_string(), socket_url.clone()),
                     ("export".to_string(), format!("DOCKER_HOST={socket_url}")),
-                ])
-            }
-            Ok((status, _)) => {
-                (false, vec![
+                ],
+            ),
+            Ok((status, _)) => (
+                false,
+                vec![
                     ("socket".to_string(), socket.display().to_string()),
-                    ("error".to_string(), format!("unexpected response: {status}")),
-                ])
-            }
-            Err(err) => {
-                (false, vec![
+                    (
+                        "error".to_string(),
+                        format!("unexpected response: {status}"),
+                    ),
+                ],
+            ),
+            Err(err) => (
+                false,
+                vec![
                     ("socket".to_string(), socket.display().to_string()),
                     ("error".to_string(), err.to_string()),
-                ])
-            }
+                ],
+            ),
         }
     };
 
@@ -1432,10 +1710,15 @@ async fn ps(args: PsArgs) -> Result<()> {
     }
 
     if let Some(mut table) = make_table(&["ID", "NAME", "IMAGE", "STATE"]) {
-        table.column_mut(2).unwrap().set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
+        table
+            .column_mut(2)
+            .unwrap()
+            .set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(40)));
         for container in &containers {
             let is_running = container.state.as_deref() == Some("running");
-            let state_str = container.state.as_deref()
+            let state_str = container
+                .state
+                .as_deref()
                 .unwrap_or(container.status.as_deref().unwrap_or("unknown"));
             let state_cell = if is_running {
                 Cell::new(state_str).fg(Color::Green)
@@ -1454,7 +1737,13 @@ async fn ps(args: PsArgs) -> Result<()> {
         println!("ID\tNAME\tIMAGE\tSTATE");
         for c in &containers {
             let state_str = c.state.as_deref().unwrap_or("unknown");
-            println!("{}\t{}\t{}\t{}", short_id(&c.metadata.id), c.metadata.display_name(), c.metadata.image.as_deref().unwrap_or(""), state_str);
+            println!(
+                "{}\t{}\t{}\t{}",
+                short_id(&c.metadata.id),
+                c.metadata.display_name(),
+                c.metadata.image.as_deref().unwrap_or(""),
+                state_str
+            );
         }
     }
 
@@ -1489,7 +1778,10 @@ async fn cleanup(args: CleanupArgs) -> Result<()> {
 
     containers.retain(|c| c.metadata.managed);
     if args.session.is_some() {
-        println!("{} --session filter is not yet supported; listing all PSP-managed containers", col_warn("!"));
+        println!(
+            "{} --session filter is not yet supported; listing all PSP-managed containers",
+            col_warn("!")
+        );
     }
 
     if containers.is_empty() {
@@ -1500,7 +1792,8 @@ async fn cleanup(args: CleanupArgs) -> Result<()> {
     println!("PSP-managed containers to remove:");
     for c in &containers {
         let state_str = c.state.as_deref().unwrap_or("unknown");
-        println!("  {} {} {} ({})",
+        println!(
+            "  {} {} {} ({})",
             col_warn("~"),
             short_id(&c.metadata.id),
             c.metadata.display_name(),
@@ -1514,7 +1807,10 @@ async fn cleanup(args: CleanupArgs) -> Result<()> {
             bail!("non-interactive mode: use --force to remove containers without confirmation");
         }
         let confirmed = dialoguer::Confirm::new()
-            .with_prompt(format!("Remove {} PSP-managed container(s)?", containers.len()))
+            .with_prompt(format!(
+                "Remove {} PSP-managed container(s)?",
+                containers.len()
+            ))
             .default(false)
             .interact()?;
         if !confirmed {
@@ -1523,10 +1819,16 @@ async fn cleanup(args: CleanupArgs) -> Result<()> {
         }
     }
 
-    state.startup_sweep().await
+    state
+        .startup_sweep()
+        .await
         .map_err(|error| anyhow!("cleanup failed: {error:?}"))?;
 
-    println!("{} Removed {} PSP-managed container(s).", col_ok("✓"), containers.len());
+    println!(
+        "{} Removed {} PSP-managed container(s).",
+        col_ok("✓"),
+        containers.len()
+    );
     Ok(())
 }
 
@@ -1536,9 +1838,24 @@ fn completions(args: CompletionsArgs) -> Result<()> {
     let mut cmd = Cli::command();
     let name = "psp";
     match args.shell {
-        CompletionShell::Bash => generate(clap_complete::shells::Bash, &mut cmd, name, &mut io::stdout()),
-        CompletionShell::Zsh => generate(clap_complete::shells::Zsh, &mut cmd, name, &mut io::stdout()),
-        CompletionShell::Fish => generate(clap_complete::shells::Fish, &mut cmd, name, &mut io::stdout()),
+        CompletionShell::Bash => generate(
+            clap_complete::shells::Bash,
+            &mut cmd,
+            name,
+            &mut io::stdout(),
+        ),
+        CompletionShell::Zsh => generate(
+            clap_complete::shells::Zsh,
+            &mut cmd,
+            name,
+            &mut io::stdout(),
+        ),
+        CompletionShell::Fish => generate(
+            clap_complete::shells::Fish,
+            &mut cmd,
+            name,
+            &mut io::stdout(),
+        ),
     }
     Ok(())
 }
@@ -1558,7 +1875,11 @@ async fn psp_init(args: InitArgs) -> Result<()> {
 
         // Create policy
         if policy_path.exists() && !args.force {
-            println!("  {} policy already exists: {}", col_warn("!"), policy_path.display());
+            println!(
+                "  {} policy already exists: {}",
+                col_warn("!"),
+                policy_path.display()
+            );
             println!("     pass --force to overwrite");
         } else {
             init_policy(InitPolicyArgs {
@@ -1566,7 +1887,11 @@ async fn psp_init(args: InitArgs) -> Result<()> {
                 profile: args.profile.clone(),
                 force: args.force,
             })?;
-            println!("  {} Created policy: {}", col_ok("✓"), policy_path.display());
+            println!(
+                "  {} Created policy: {}",
+                col_ok("✓"),
+                policy_path.display()
+            );
         }
 
         // Create .psp.json
@@ -1574,10 +1899,21 @@ async fn psp_init(args: InitArgs) -> Result<()> {
             "policy_path": "policy/default-policy.json"
         });
         if config_path.exists() && !args.force {
-            println!("  {} config already exists: {}", col_warn("!"), config_path.display());
+            println!(
+                "  {} config already exists: {}",
+                col_warn("!"),
+                config_path.display()
+            );
         } else {
-            fs::write(&config_path, format!("{}\n", serde_json::to_string_pretty(&psp_config)?))?;
-            println!("  {} Created config: {}", col_ok("✓"), config_path.display());
+            fs::write(
+                &config_path,
+                format!("{}\n", serde_json::to_string_pretty(&psp_config)?),
+            )?;
+            println!(
+                "  {} Created config: {}",
+                col_ok("✓"),
+                config_path.display()
+            );
         }
 
         print_next_steps(false);
@@ -1596,7 +1932,11 @@ async fn psp_init(args: InitArgs) -> Result<()> {
         }
 
         if policy_path.exists() && !args.force {
-            println!("  {} policy already exists: {}", col_warn("!"), policy_path.display());
+            println!(
+                "  {} policy already exists: {}",
+                col_warn("!"),
+                policy_path.display()
+            );
             println!("     pass --force to overwrite");
         } else {
             init_policy(InitPolicyArgs {
@@ -1604,17 +1944,32 @@ async fn psp_init(args: InitArgs) -> Result<()> {
                 profile: args.profile.clone(),
                 force: args.force,
             })?;
-            println!("  {} Created policy: {}", col_ok("✓"), policy_path.display());
+            println!(
+                "  {} Created policy: {}",
+                col_ok("✓"),
+                policy_path.display()
+            );
         }
 
         if config_path.exists() && !args.force {
-            println!("  {} config already exists: {}", col_warn("!"), config_path.display());
+            println!(
+                "  {} config already exists: {}",
+                col_warn("!"),
+                config_path.display()
+            );
         } else {
             let psp_config = serde_json::json!({
                 "policy_path": policy_path.display().to_string()
             });
-            fs::write(&config_path, format!("{}\n", serde_json::to_string_pretty(&psp_config)?))?;
-            println!("  {} Created config: {}", col_ok("✓"), config_path.display());
+            fs::write(
+                &config_path,
+                format!("{}\n", serde_json::to_string_pretty(&psp_config)?),
+            )?;
+            println!(
+                "  {} Created config: {}",
+                col_ok("✓"),
+                config_path.display()
+            );
         }
 
         print_next_steps(true);
@@ -1631,17 +1986,16 @@ fn print_next_steps(show_tip: bool) {
     println!("  3. Verify:             psp doctor");
     if show_tip {
         println!();
-        println!("  Tip: run 'psp init --profile workspace-postgres' for a Testcontainers starter policy");
+        println!(
+            "  Tip: run 'psp init --profile workspace-postgres' for a Testcontainers starter policy"
+        );
     }
 }
 
 fn dirs_or_default() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join(".config"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"))
         .join("psp")
 }
@@ -1659,7 +2013,10 @@ fn build_state(resolved: &ResolvedConfig) -> Result<AppState> {
     )
 }
 
-async fn spawn_temp_psp(socket: PathBuf, state: AppState) -> Result<(oneshot::Sender<()>, JoinHandle<()>)> {
+async fn spawn_temp_psp(
+    socket: PathBuf,
+    state: AppState,
+) -> Result<(oneshot::Sender<()>, JoinHandle<()>)> {
     if let Some(parent) = socket.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -1699,13 +2056,18 @@ async fn request_json(
     }
     let request = builder
         .body(Full::new(bytes::Bytes::from(
-            body.map(|v| serde_json::to_vec(&v).unwrap()).unwrap_or_default(),
+            body.map(|v| serde_json::to_vec(&v).unwrap())
+                .unwrap_or_default(),
         )))
         .unwrap();
     let response = client.request(request).await?;
     let status = response.status();
     let bytes = response.into_body().collect().await?.to_bytes();
-    let body = if bytes.is_empty() { json!({}) } else { serde_json::from_slice(&bytes)? };
+    let body = if bytes.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
     Ok((status, body))
 }
 
@@ -1740,14 +2102,21 @@ fn find_container<'a>(
         .filter(|container| {
             container.metadata.id == normalized
                 || container.metadata.id.starts_with(normalized)
-                || container.metadata.names.iter().any(|name| name == normalized)
+                || container
+                    .metadata
+                    .names
+                    .iter()
+                    .any(|name| name == normalized)
         })
         .collect();
 
     match matches.as_slice() {
         [] => bail!("no discovered container matched {}", needle),
         [container] => Ok(*container),
-        _ => bail!("multiple discovered containers matched {}; use a more specific id", needle),
+        _ => bail!(
+            "multiple discovered containers matched {}; use a more specific id",
+            needle
+        ),
     }
 }
 
@@ -1772,13 +2141,18 @@ fn discovery_policy_path(
 }
 
 fn global_policy_path(resolved: &ResolvedConfig) -> Result<PathBuf> {
-    if let Some(path) = policy_path_from_config_file(resolved.sources.loaded_global_config.as_deref())? {
+    if let Some(path) =
+        policy_path_from_config_file(resolved.sources.loaded_global_config.as_deref())?
+    {
         return Ok(path);
     }
 
     if let Some(config_path) = resolved.sources.global_config_path.as_ref() {
         let parent = config_path.parent().ok_or_else(|| {
-            anyhow!("global config path {} has no parent directory", config_path.display())
+            anyhow!(
+                "global config path {} has no parent directory",
+                config_path.display()
+            )
         })?;
         return Ok(parent.join("policy.json"));
     }
@@ -1787,7 +2161,9 @@ fn global_policy_path(resolved: &ResolvedConfig) -> Result<PathBuf> {
 }
 
 fn project_policy_path(resolved: &ResolvedConfig) -> Result<PathBuf> {
-    if let Some(path) = policy_path_from_config_file(resolved.sources.loaded_project_config.as_deref())? {
+    if let Some(path) =
+        policy_path_from_config_file(resolved.sources.loaded_project_config.as_deref())?
+    {
         return Ok(path);
     }
 

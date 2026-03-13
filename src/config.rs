@@ -31,7 +31,8 @@ impl Config {
     }
 
     pub fn resolve_from_env() -> Result<ResolvedConfig> {
-        let cwd = std::env::current_dir().context("failed to determine current working directory")?;
+        let cwd =
+            std::env::current_dir().context("failed to determine current working directory")?;
         let env = EnvConfig::from_process();
         Self::resolve(&cwd, &env)
     }
@@ -485,7 +486,10 @@ mod tests {
         let config = resolved.config;
 
         assert_eq!(config.listen_socket, PathBuf::from(DEFAULT_LISTEN_SOCKET));
-        assert_eq!(config.policy_path, PathBuf::from("policy/default-policy.json"));
+        assert_eq!(
+            config.policy_path,
+            PathBuf::from("policy/default-policy.json")
+        );
         assert_eq!(config.advertised_host, DEFAULT_ADVERTISED_HOST);
         assert!(!config.keep_on_failure);
         assert!(!config.require_session_id);

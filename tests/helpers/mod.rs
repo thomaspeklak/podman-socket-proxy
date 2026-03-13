@@ -18,8 +18,7 @@ use hyper::Request as HyperRequest;
 use hyper_util::{client::legacy::Client as TestClient, rt::TokioExecutor};
 use hyperlocal::UnixConnector;
 use podman_socket_proxy::{
-    AppState, BackendConfig,
-    normalize_versioned_path,
+    AppState, BackendConfig, normalize_versioned_path,
     policy::{BindMountPolicy, ImagePolicy, POLICY_SCHEMA_VERSION, Policy},
     router,
     session::{LABEL_MANAGED, LABEL_SESSION, SESSION_HEADER},
@@ -149,9 +148,7 @@ impl MockHandler for LifecycleMock {
             {
                 StatusCode::NO_CONTENT.into_response()
             }
-            (Method::GET, path)
-                if path.starts_with("/containers/") && path.ends_with("/json") =>
-            {
+            (Method::GET, path) if path.starts_with("/containers/") && path.ends_with("/json") => {
                 if let Some(ref body) = self.inspect_body {
                     Json(body.clone()).into_response()
                 } else {
@@ -171,22 +168,16 @@ impl MockHandler for LifecycleMock {
                     .into_response()
                 }
             }
-            (Method::GET, path)
-                if path.starts_with("/containers/") && path.ends_with("/logs") =>
-            {
+            (Method::GET, path) if path.starts_with("/containers/") && path.ends_with("/logs") => {
                 (StatusCode::OK, "ready\n").into_response()
             }
-            (Method::POST, path)
-                if path.starts_with("/containers/") && path.ends_with("/wait") =>
-            {
+            (Method::POST, path) if path.starts_with("/containers/") && path.ends_with("/wait") => {
                 Json(json!({"StatusCode": 0})).into_response()
             }
             (Method::DELETE, path) if path.starts_with("/containers/") => {
                 StatusCode::NO_CONTENT.into_response()
             }
-            (Method::GET, "/containers/json") => {
-                Json(json!([])).into_response()
-            }
+            (Method::GET, "/containers/json") => Json(json!([])).into_response(),
             _ => StatusCode::NOT_FOUND.into_response(),
         }
     }

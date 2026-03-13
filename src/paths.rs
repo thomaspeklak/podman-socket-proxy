@@ -48,10 +48,8 @@ pub fn is_supported_endpoint(method: &Method, normalized: &str) -> bool {
         // exec start and inspect — always 3 segments: /exec/{id}/start or /exec/{id}/json
         _ if normalized.starts_with("/exec/") => {
             let segments = path_segment_count(normalized);
-            matches!(
-                (method.as_str(), segments),
-                ("POST", 3) | ("GET", 3)
-            ) && (normalized.ends_with("/start") || normalized.ends_with("/json"))
+            matches!((method.as_str(), segments), ("POST", 3) | ("GET", 3))
+                && (normalized.ends_with("/start") || normalized.ends_with("/json"))
         }
         _ => false,
     }

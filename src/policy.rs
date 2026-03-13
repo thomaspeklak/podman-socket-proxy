@@ -212,11 +212,7 @@ impl Policy {
         let normalized = normalize_image_ref(image);
 
         if self.images.denylist.iter().any(|entry| image == entry)
-            || self
-                .images
-                .normalized_denylist
-                .iter()
-                .any(|n| *n == normalized)
+            || self.images.normalized_denylist.contains(&normalized)
         {
             return Err(Denial::new(
                 RULE_IMAGE_DENYLIST,
@@ -226,11 +222,7 @@ impl Policy {
 
         if !self.images.allowlist.is_empty()
             && !self.images.allowlist.iter().any(|entry| image == entry)
-            && !self
-                .images
-                .normalized_allowlist
-                .iter()
-                .any(|n| *n == normalized)
+            && !self.images.normalized_allowlist.contains(&normalized)
         {
             return Err(Denial::new(
                 RULE_IMAGE_ALLOWLIST,
@@ -350,14 +342,19 @@ impl ContainerAccessPolicy {
         container: &ContainerMetadata,
     ) -> bool {
         let candidates = container.match_candidates();
-        if raw_entries.iter().any(|entry| candidates.contains(&entry.as_str())) {
+        if raw_entries
+            .iter()
+            .any(|entry| candidates.contains(&entry.as_str()))
+        {
             return true;
         }
         let normalized_candidates: Vec<String> = candidates
             .iter()
             .map(|candidate| normalize_container_ref(candidate))
             .collect();
-        normalized_entries.iter().any(|norm| normalized_candidates.contains(norm))
+        normalized_entries
+            .iter()
+            .any(|norm| normalized_candidates.contains(norm))
     }
 }
 
@@ -699,8 +696,7 @@ mod tests {
 
     #[test]
     fn allows_fully_qualified_image_matching_short_allowlist() {
-        let body = serde_json::to_vec(&json!({"Image": "docker.io/library/postgres:16"}))
-            .unwrap();
+        let body = serde_json::to_vec(&json!({"Image": "docker.io/library/postgres:16"})).unwrap();
         assert!(
             policy()
                 .evaluate_request(&Method::POST, "/containers/create", None, &body)
@@ -775,31 +771,38 @@ mod tests {
 
     #[test]
     fn allows_managed_container_without_explicit_entry() {
-        assert!(policy()
-            .evaluate_container_access(&ContainerMetadata {
-                id: "cid-managed".into(),
-                names: vec!["managed-db".into()],
-                image: None,
-                managed: true,
-            })
-            .is_ok());
+        assert!(
+            policy()
+                .evaluate_container_access(&ContainerMetadata {
+                    id: "cid-managed".into(),
+                    names: vec!["managed-db".into()],
+                    image: None,
+                    managed: true,
+                })
+                .is_ok()
+        );
     }
 
     #[test]
     fn allows_non_managed_container_when_name_is_allowlisted() {
-        assert!(policy()
-            .evaluate_container_access(&ContainerMetadata {
-                id: "cid-other".into(),
-                names: vec!["shared-db".into()],
-                image: Some("postgres:16".into()),
-                managed: false,
-            })
-            .is_ok());
+        assert!(
+            policy()
+                .evaluate_container_access(&ContainerMetadata {
+                    id: "cid-other".into(),
+                    names: vec!["shared-db".into()],
+                    image: Some("postgres:16".into()),
+                    managed: false,
+                })
+                .is_ok()
+        );
     }
 
     #[test]
     fn normalize_bind_path_resolves_traversal() {
-        assert_eq!(normalize_bind_path("/workspace/../etc/shadow"), "/etc/shadow");
+        assert_eq!(
+            normalize_bind_path("/workspace/../etc/shadow"),
+            "/etc/shadow"
+        );
         assert_eq!(normalize_bind_path("/workspace/./sub"), "/workspace/sub");
         assert_eq!(normalize_bind_path("/a/b/c/../../d"), "/a/d");
     }

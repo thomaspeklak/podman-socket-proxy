@@ -1,4 +1,7 @@
-use axum::{body::Bytes, http::{Method, StatusCode}};
+use axum::{
+    body::Bytes,
+    http::{Method, StatusCode},
+};
 
 use crate::session::LABEL_MANAGED;
 
@@ -56,7 +59,8 @@ pub fn rewrite_response_body(
 /// (e.g. REBUILD_SNAPSHOT=false) can find containers created in previous sessions
 /// that were not themselves started through this PSP instance.
 fn filter_managed_containers(body: Bytes) -> Bytes {
-    let Ok(serde_json::Value::Array(containers)) = serde_json::from_slice::<serde_json::Value>(&body)
+    let Ok(serde_json::Value::Array(containers)) =
+        serde_json::from_slice::<serde_json::Value>(&body)
     else {
         return body;
     };
@@ -77,5 +81,7 @@ fn filter_managed_containers(body: Bytes) -> Bytes {
         })
         .collect();
 
-    serde_json::to_vec(&filtered).map(Bytes::from).unwrap_or(body)
+    serde_json::to_vec(&filtered)
+        .map(Bytes::from)
+        .unwrap_or(body)
 }

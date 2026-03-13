@@ -213,6 +213,21 @@ impl MockHandler for SweepMock {
     }
 }
 
+/// Mock that returns a configurable container list for GET /containers/json
+pub struct ContainerListMock {
+    pub list_body: Value,
+}
+
+impl MockHandler for ContainerListMock {
+    async fn handle(&self, req: Request) -> axum::response::Response {
+        let normalized = normalize_versioned_path(req.uri().path());
+        match (req.method().clone(), normalized.as_str()) {
+            (Method::GET, "/containers/json") => Json(self.list_body.clone()).into_response(),
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+}
+
 /// Mock that captures the create request body
 pub struct CaptureMock {
     pub captured: Arc<Mutex<Option<Value>>>,

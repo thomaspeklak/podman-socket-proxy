@@ -30,9 +30,11 @@ pub fn is_supported_endpoint(method: &Method, normalized: &str) -> bool {
         _ if normalized.starts_with("/containers/") => {
             let segments = path_segment_count(normalized);
             match (method.as_str(), segments) {
+                // container list — PSP filters response to managed containers only
+                ("GET", 2) => normalized == "/containers/json",
                 ("GET", 3) => normalized.ends_with("/json") || normalized.ends_with("/logs"),
                 ("POST", 3) => normalized.ends_with("/start") || normalized.ends_with("/wait"),
-                ("DELETE", 2) => true,
+                ("DELETE", 2) => normalized != "/containers/json",
                 _ => false,
             }
         }

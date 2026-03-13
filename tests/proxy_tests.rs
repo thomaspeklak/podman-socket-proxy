@@ -384,6 +384,53 @@ fn accepts_image_inspect_paths() {
 }
 
 #[test]
+fn accepts_container_list_path() {
+    assert!(is_supported_endpoint(&Method::GET, "/containers/json"));
+    assert!(is_supported_endpoint(
+        &Method::GET,
+        &normalize_versioned_path("/v1.41/containers/json")
+    ));
+    // only GET is allowed
+    assert!(!is_supported_endpoint(&Method::DELETE, "/containers/json"));
+    assert!(!is_supported_endpoint(&Method::POST, "/containers/json"));
+}
+
+#[tokio::test]
+async fn container_list_filters_to_psp_managed_only() {
+    let backend = spawn_mock_backend(helpers::ContainerListMock {
+        list_body: json!([
+            {"Id": "cid-managed", "Labels": {"io.psp.managed": "true", "io.psp.session": "sess-1"}},
+            {"Id": "cid-foreign", "Labels": {"some.other.label": "true"}},
+            {"Id": "cid-no-labels"}
+        ]),
+    })
+    .await;
+    let temp = TempDir::new().unwrap();
+    let socket = temp.path().join("psp.sock");
+    let (psp_shutdown, psp_handle) = spawn_psp(socket.clone(), backend.url).await;
+    let client = new_test_client();
+
+    let response = request_json(
+        &client,
+        &socket,
+        Method::GET,
+        "/v1.41/containers/json",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::OK);
+    let list = response.1.as_array().unwrap().clone();
+    assert_eq!(list.len(), 1, "only PSP-managed container should be returned");
+    assert_eq!(list[0]["Id"], "cid-managed");
+
+    let _ = psp_shutdown.send(());
+    let _ = backend.shutdown.send(());
+    let _ = psp_handle.await;
+    let _ = backend.handle.await;
+}
+
+#[test]
 fn normalize_strips_version_prefix() {
     assert_eq!(normalize_versioned_path("/v1.41/_ping"), "/_ping");
     assert_eq!(

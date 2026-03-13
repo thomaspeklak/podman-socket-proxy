@@ -38,6 +38,7 @@ PSP matches requests against the normalized path but forwards the original reque
 | `/version` | `GET` | yes | version/capability probe |
 | `/info` | `GET` | yes | runtime metadata probe |
 | `/images/create` | `POST` | yes | image pull entrypoint |
+| `/containers/json` | `GET` | yes | container list; PSP filters response to `io.psp.managed=true` containers only |
 | `/containers/create` | `POST` | yes | create container; PSP may inject labels |
 | `/containers/{id}/start` | `POST` | yes | start container |
 | `/containers/{id}/json` | `GET` | yes | inspect container; PSP rewrites `HostIp` fields |

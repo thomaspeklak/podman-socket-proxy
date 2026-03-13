@@ -1,5 +1,7 @@
 use axum::{body::Bytes, http::{Method, StatusCode}};
 
+use crate::session::LABEL_MANAGED;
+
 /// Rewrite response body. `normalized` must be a pre-normalized path.
 pub fn rewrite_response_body(
     method: &Method,
@@ -10,6 +12,11 @@ pub fn rewrite_response_body(
 ) -> Bytes {
     if method != Method::GET || status != StatusCode::OK {
         return body;
+    }
+
+    // Container list — filter to PSP-managed containers only.
+    if normalized == "/containers/json" {
+        return filter_managed_containers(body);
     }
 
     if !(normalized.starts_with("/containers/") && normalized.ends_with("/json")) {
@@ -40,4 +47,24 @@ pub fn rewrite_response_body(
     }
 
     serde_json::to_vec(&json).map(Bytes::from).unwrap_or(body)
+}
+
+/// Keep only containers that carry the `io.psp.managed=true` label.
+fn filter_managed_containers(body: Bytes) -> Bytes {
+    let Ok(serde_json::Value::Array(containers)) = serde_json::from_slice::<serde_json::Value>(&body)
+    else {
+        return body;
+    };
+
+    let filtered: Vec<serde_json::Value> = containers
+        .into_iter()
+        .filter(|c| {
+            c.get("Labels")
+                .and_then(|l| l.get(LABEL_MANAGED))
+                .and_then(|v| v.as_str())
+                == Some("true")
+        })
+        .collect();
+
+    serde_json::to_vec(&filtered).map(Bytes::from).unwrap_or(body)
 }

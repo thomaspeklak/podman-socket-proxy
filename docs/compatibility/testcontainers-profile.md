@@ -46,6 +46,9 @@ PSP matches requests against the normalized path but forwards the original reque
 | `/containers/{id}/logs` | `GET` | yes | container logs |
 | `/containers/{id}/wait` | `POST` | yes | wait for exit |
 | `/containers/{id}` | `DELETE` | yes | remove container |
+| `/containers/{id}/exec` | `POST` | yes | create exec instance for health checks |
+| `/exec/{id}/start` | `POST` | yes | start exec instance |
+| `/exec/{id}/json` | `GET` | yes | inspect exec result (exit code) |
 
 ## Important PSP-specific behavior
 

@@ -384,6 +384,23 @@ fn accepts_image_inspect_paths() {
 }
 
 #[test]
+fn accepts_exec_paths() {
+    // create exec on a container
+    assert!(is_supported_endpoint(&Method::POST, "/containers/cid-abc/exec"));
+    assert!(is_supported_endpoint(
+        &Method::POST,
+        &normalize_versioned_path("/v1.41/containers/cid-abc/exec")
+    ));
+    // start exec
+    assert!(is_supported_endpoint(&Method::POST, "/exec/eid-abc/start"));
+    // inspect exec result
+    assert!(is_supported_endpoint(&Method::GET, "/exec/eid-abc/json"));
+    // wrong methods
+    assert!(!is_supported_endpoint(&Method::GET, "/containers/cid-abc/exec"));
+    assert!(!is_supported_endpoint(&Method::DELETE, "/exec/eid-abc/start"));
+}
+
+#[test]
 fn accepts_container_list_path() {
     assert!(is_supported_endpoint(&Method::GET, "/containers/json"));
     assert!(is_supported_endpoint(
